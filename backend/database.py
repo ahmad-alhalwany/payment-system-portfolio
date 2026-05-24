@@ -4,6 +4,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Get database URL from environment variable with fallback
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
