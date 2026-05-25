@@ -8,7 +8,7 @@ Usage:
 
 from database import engine, SessionLocal
 from models import Base
-from services.demo import ensure_demo_data
+from services.demo import ensure_demo_data, demo_data_summary
 
 
 def seed():
@@ -16,12 +16,19 @@ def seed():
     db = SessionLocal()
     try:
         ensure_demo_data(db)
+        counts = demo_data_summary(db)
         print("Demo data synced successfully.")
         print("")
-        print("Demo accounts (password for all: demo123):")
-        print("  director  — مدير النظام")
-        print("  manager   — مدير فرع دمشق")
-        print("  employee  — موظف حوالات")
+        print(f"  Branches:     {counts['branches']}")
+        print(f"  Users:        {counts['users']}")
+        print(f"  Transfers:    {counts['transactions']} (DEMO-* IDs)")
+        print("")
+        print("Demo login accounts (password for all: demo123):")
+        print("  director  — System director")
+        print("  manager   — Damascus branch manager")
+        print("  employee  — Damascus transfer clerk")
+        print("")
+        print("Additional seeded users (same password): manager.hlb, employee2, employee.hlb")
     except Exception as exc:
         db.rollback()
         raise exc

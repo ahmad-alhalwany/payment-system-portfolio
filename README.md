@@ -70,6 +70,8 @@ flowchart LR
 
 **Login page:** `/login` — or `/demo/login/` for one-click role-based login.
 
+> **Demo data:** On deploy, set `AUTO_SEED_DEMO=true` and `DEMO_MODE=true`. The backend seeds **3 branches**, **6 users**, and **20 sample transfers** (IDs `DEMO-0001` … `DEMO-0020`) with mixed statuses, SYP/USD amounts, and dates spanning the last 30 days — so dashboards, reports, and profit pages look populated out of the box. Run `python seed.py` manually after the first deploy if needed.
+
 ---
 
 ## Features
