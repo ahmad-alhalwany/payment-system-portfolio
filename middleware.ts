@@ -1,40 +1,39 @@
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { canAccessPath, getDashboardForRole } from "@/lib/route-access";
 
-const directorRoutes = [
-  '/dashboard/director',
-  '/dashboard/branches',
-  '/dashboard/employees',
-  '/dashboard/reports',
-];
-const branchManagerRoutes = [
-  '/branch-dashboard',
-  // أضف مسارات مدير الفرع هنا
-];
+const protectedPrefixes = ["/dashboard", "/branch-dashboard", "/director"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const token = request.cookies.get('token')?.value;
-  const userRole = request.cookies.get('userRole')?.value;
 
-  // حماية صفحات المدير
-  if (directorRoutes.some(route => pathname.startsWith(route))) {
-    if (!token || userRole !== 'director') {
-      return NextResponse.redirect(new URL('/unauthorized', request.url));
-    }
+  // Legacy /director/* routes → modern /dashboard/*
+  if (pathname === "/director" || pathname === "/director/") {
+    return NextResponse.redirect(new URL("/dashboard/director", request.url));
   }
-  // حماية صفحات مدير الفرع
-  if (branchManagerRoutes.some(route => pathname.startsWith(route))) {
-    if (!token || userRole !== 'branch_manager') {
-      return NextResponse.redirect(new URL('/unauthorized', request.url));
-    }
+  if (pathname.startsWith("/director/")) {
+    const rest = pathname.slice("/director".length);
+    return NextResponse.redirect(new URL(`/dashboard${rest}`, request.url));
   }
+
+  const token = request.cookies.get("token")?.value;
+  const role = request.cookies.get("userRole")?.value ?? "";
+
+  const isProtected = protectedPrefixes.some((prefix) => pathname.startsWith(prefix));
+
+  if (isProtected && !token) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("next", pathname);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  if (isProtected && token && role && !canAccessPath(role, pathname)) {
+    return NextResponse.redirect(new URL(getDashboardForRole(role), request.url));
+  }
+
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: [
-    '/dashboard/:path*',
-    '/branch-dashboard/:path*',
-  ],
-}; 
+  matcher: ["/dashboard/:path*", "/branch-dashboard/:path*", "/director", "/director/:path*"],
+};

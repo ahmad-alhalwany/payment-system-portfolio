@@ -44,6 +44,16 @@ export const authApi = {
     }
   },
 
+  // One-click demo login by role (portfolio mode)
+  demoLogin: async (role: string): Promise<LoginResponse> => {
+    try {
+      const response = await axiosInstance.post('/demo/login/', { role });
+      return response.data;
+    } catch (error: any) {
+      throw new Error(error.response?.data?.detail || 'فشل في دخول الديمو');
+    }
+  },
+
   // Change password
   changePassword: async (oldPassword: string, newPassword: string): Promise<{ status: string; message: string }> => {
     try {

@@ -18,15 +18,41 @@ if not root_logger.hasHandlers():
 logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, HTTPException, Depends, status, Request
-from sqlalchemy import create_engine, func, and_, or_, desc
-from sqlalchemy.orm import sessionmaker, Session, joinedload, aliased
+from contextlib import asynccontextmanager
+from sqlalchemy import func, and_, or_, desc
+from sqlalchemy.orm import Session, joinedload, aliased
 from models import User, Branch, Base, BranchFund, Notification, Transaction, BranchProfits
 from pydantic import BaseModel, field_validator, ValidationError
 import uuid
 from datetime import datetime, timedelta
-from security import hash_password, verify_password, create_jwt_token, SECRET_KEY, ALGORITHM
-from fastapi.security import OAuth2PasswordBearer
-from jose import jwt, JWTError
+from security import (
+    hash_password,
+    verify_password,
+    get_current_user,
+)
+from database import get_db, init_db
+from config import settings
+from routers.health import router as health_router
+from routers.auth import router as auth_router, apply_login_rate_limit
+from routers.demo import router as demo_router
+from routers.branches_ops import router as branches_ops_router
+from routers.transactions_ops import router as transactions_ops_router
+from routers.reports_ops import router as reports_ops_router
+from routers.inventory_ops import router as inventory_ops_router
+from routers.settings_ops import router as settings_ops_router
+from routers.branch_manager_ops import router as branch_manager_ops_router
+from routers.branch_employees_ops import router as branch_employees_ops_router
+from routers.branch_profits_ops import router as branch_profits_ops_router
+from services.branch_funds import compute_branch_status
+from services.transactions import serialize_transaction
+from services.users import (
+    serialize_user,
+    serialize_users,
+    validate_user_create,
+    validate_user_delete,
+)
+from schemas.auth import UserCreate
+from services.backup import create_json_backup, create_sql_backup
 from typing import Optional, List, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
 import sqlalchemy.exc
@@ -45,47 +71,71 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import traceback
 from fastapi import APIRouter
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        init_db()
+        logger.info("Database tables initialized")
+        if settings.auto_seed_demo:
+            from database import SessionLocal
+            from services.demo import ensure_demo_data
+
+            db = SessionLocal()
+            try:
+                ensure_demo_data(db)
+                logger.info("Demo data synced")
+            except Exception as seed_exc:
+                logger.warning("Demo seed skipped — %s", seed_exc)
+            finally:
+                db.close()
+    except Exception as exc:
+        logger.warning("Database init skipped — %s", exc)
+    yield
+
+
+app = FastAPI(
+    title="Payment Transfer System API",
+    description="Multi-branch money transfer management — portfolio edition",
+    version="2.0.0",
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Get database URL from environment variable with fallback
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+psycopg2://postgres:postgres@localhost:5433/paymentdb"
-)
+app.include_router(health_router)
+app.include_router(auth_router)
+app.include_router(demo_router)
+app.include_router(branches_ops_router)
+app.include_router(transactions_ops_router)
+app.include_router(reports_ops_router)
+app.include_router(inventory_ops_router)
+app.include_router(settings_ops_router)
+app.include_router(branch_manager_ops_router)
+app.include_router(branch_employees_ops_router)
+app.include_router(branch_profits_ops_router)
 
-# Database URL
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=10,
-    max_overflow=20,
-    pool_timeout=30,
-    pool_recycle=1800
-)
+# Rate limiting on login
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+    limiter = Limiter(key_func=get_remote_address)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    _RATE_LIMITING_ENABLED = True
+except ImportError:
+    limiter = None
+    _RATE_LIMITING_ENABLED = False
 
-# engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autoflush=False, bind=engine)
-
-# Create the database tables if they don't exist
-Base.metadata.create_all(bind=engine)
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
+if _RATE_LIMITING_ENABLED:
+    apply_login_rate_limit(app, limiter)
 
 # Data models
 class TransactionSchema(BaseModel):
@@ -157,19 +207,6 @@ class TransactionStatus(BaseModel):
     transaction_id: str
     status: str
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-class PasswordReset(BaseModel):
-    username: str
-    new_password: str
-
-class ChangePassword(BaseModel):
-    old_password: str
-    new_password: str
-    
-    
 class TransactionResponse(BaseModel):
     id: str
     sender: str
@@ -184,12 +221,6 @@ class TransactionResponse(BaseModel):
     sending_branch_name: str  # إضافة هذا الحقل
     destination_branch_name: str  # إضافة هذا الحقل
     branch_governorate: str  
-    
-class UserCreate(BaseModel):
-    username: str
-    password: str
-    role: str = "employee"
-    branch_id: Optional[int] = None  
     
 class BranchUpdate(BaseModel):
     name: Optional[str] = None
@@ -206,40 +237,13 @@ class UserUpdate(BaseModel):
 
     class Config:
         from_attributes = True 
-        
-class UserCreate(BaseModel):
-    username: str
-    password: str
-    role: str = "employee"
-    branch_id: Optional[int] = None
-    
+
 class BranchCreate(BaseModel):
     branch_id: str
     name: str
     location: str
     governorate: str
     phone_number: Optional[str] = None
-        
-def get_current_user(token: str = Depends(oauth2_scheme)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("username")
-        role: str = payload.get("role")
-        branch_id: int = payload.get("branch_id")
-        user_id: int = payload.get("user_id")
-        
-        if username is None or role is None:
-            raise credentials_exception
-            
-        return {"username": username, "role": role, "branch_id": branch_id, "user_id": user_id}
-    except JWTError:
-        raise credentials_exception        
-        
 
 def save_to_db(transaction: TransactionSchema, branch_id=None, employee_id=None, db: Session = None):
     # Use the date from the transaction if provided, otherwise use now
@@ -559,40 +563,17 @@ def get_customers(
     return {"customers": customer_list}
 
 @app.get("/check-initialization/")
-def check_initialization(db: Session = Depends(get_db)):
-    admin_exists = db.query(User).filter(User.role == "director").first()
-    return {"is_initialized": admin_exists is not None}
+def check_initialization():
+    # Portfolio demo — always ready; demo accounts are auto-synced on startup
+    return {"is_initialized": True}
+
 
 @app.post("/initialize-system/")
-def initialize_system(user: UserCreate, db: Session = Depends(get_db)):
-    # Check if any admin exists
-    if db.query(User).filter(User.role == "director").first():
-        raise HTTPException(status_code=400, detail="النظام مهيأ مسبقاً")
-
-    # Create admin user
-    hashed_password = hash_password(user.password)
-    db_user = User(
-        username=user.username,
-        password=hashed_password,
-        role="director",
-        branch_id=1,  # Link to default branch
-        created_at=datetime.now()
+def initialize_system():
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="System setup is disabled in demo mode. Use demo login instead.",
     )
-    db.add(db_user)
-
-    # Create default branch if not exists
-    if not db.query(Branch).filter(Branch.id == 1).first():
-        db_branch = Branch(
-            branch_id="MAIN",
-            name="الفرع الرئيسي",
-            location="المقر المركزي",
-            governorate="المركزية",
-            created_at=datetime.now()
-        )
-        db.add(db_branch)
-
-    db.commit()
-    return {"status": "success", "message": "تم إنشاء مدير النظام بنجاح"} 
 
 @app.get("/branches/{branch_id}/funds-history")
 def get_funds_history(
@@ -717,153 +698,38 @@ def mark_transaction_received(received_data: TransactionReceived, current_user: 
             detail=f"Unexpected error: {str(e)}"
         )
 
-@app.post("/login/")
-async def login(user: LoginRequest, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.username == user.username).first() 
-    if db_user and verify_password(user.password, db_user.password):
-        # Create token with expiration time (24 hours)
-        access_token_expires = timedelta(hours=8)
-        expires = datetime.utcnow() + access_token_expires
-        
-        # Include user role and branch_id in the token
-        token_data = {
-            "username": db_user.username,
-            "role": db_user.role,
-            "branch_id": db_user.branch_id,
-            "user_id": db_user.id,
-            "exp": expires
-        }
-        
-        access_token = create_jwt_token(token_data)
-        return {
-            "access_token": access_token, 
-            "token_type": "bearer", 
-            "role": db_user.role, 
-            "username": db_user.username,
-            "branch_id": db_user.branch_id,
-            "user_id": db_user.id,
-            "token": access_token  # Adding token directly for frontend compatibility
-        }
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-@app.post("/register/")
-def register_user(user: UserCreate, token: str = Depends(oauth2_scheme)):
-    try:
-        # Try to decode the token
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("username")
-        role = payload.get("role")
-        branch_id = payload.get("branch_id")
-        user_id = payload.get("user_id")
-        
-        # Check if user has permission to create users
-        if role not in ["director", "branch_manager"]:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions")
-        
-        # Branch managers can only create employees for their own branch
-        if role == "branch_manager" and (user.role != "employee" or user.branch_id != branch_id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Branch managers can only create employees for their own branch")
-        
-        db = SessionLocal()
-        try:
-            # Check if username already exists
-            existing_user = db.query(User).filter(User.username == user.username).first()
-            if existing_user:
-                raise HTTPException(status_code=400, detail="Username already registered")
-            
-            # Check if branch exists if branch_id is provided
-            if user.branch_id:
-                branch = db.query(Branch).filter(Branch.id == user.branch_id).first()
-                if not branch:
-                    raise HTTPException(status_code=404, detail="Branch not found")
-            
-            # Create new user
-            hashed_password = hash_password(user.password)
-            db_user = User(
-                username=user.username,
-                password=hashed_password,
-                role=user.role,
-                branch_id=user.branch_id,
-                created_at=datetime.now()
-            )
-            
-            db.add(db_user)
-            db.commit()
-            db.refresh(db_user)
-            
-            branch_name = None
-            if db_user.branch_id:
-                branch = db.query(Branch).filter(Branch.id == db_user.branch_id).first()
-                branch_name = branch.name if branch else None
-            return {
-                "id": db_user.id,
-                "username": db_user.username,
-                "role": db_user.role,
-                "branch_id": db_user.branch_id,
-                "branch_name": branch_name,
-                "created_at": db_user.created_at.strftime("%Y-%m-%d %H:%M:%S") if db_user.created_at else None
-            }
-        finally:
-            db.close()
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
 @app.post("/users/")
 def create_user(user: UserCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    # Check if user has permission to create users
     if current_user["role"] not in ["director", "branch_manager"]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions")
-    
-    # Branch managers can only create employees for their own branch
-    if current_user["role"] == "branch_manager" and (user.role != "employee" or user.branch_id != current_user["branch_id"]):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Branch managers can only create employees")
-    
-    # Check if username already exists
+
+    try:
+        validate_user_create(current_user, user.role, user.branch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     existing_user = db.query(User).filter(User.username == user.username).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already registered")
-    
-    # Check if branch exists if branch_id is provided
+
     if user.branch_id:
         branch = db.query(Branch).filter(Branch.id == user.branch_id).first()
         if not branch:
             raise HTTPException(status_code=404, detail="Branch not found")
-    
-    # Create new user
-    hashed_password = hash_password(user.password)
+
     db_user = User(
         username=user.username,
-        password=hashed_password,
+        password=hash_password(user.password),
         role=user.role,
         branch_id=user.branch_id,
-        created_at=datetime.now()
+        created_at=datetime.now(),
     )
-    
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
-    
-    branch_name = None
-    if db_user.branch_id:
-        branch = db.query(Branch).filter(Branch.id == db_user.branch_id).first()
-        branch_name = branch.name if branch else None
-    return {
-        "id": db_user.id,
-        "username": db_user.username,
-        "role": db_user.role,
-        "branch_id": db_user.branch_id,
-        "branch_name": branch_name,
-        "created_at": db_user.created_at.strftime("%Y-%m-%d %H:%M:%S") if db_user.created_at else None
-    }
+
+    branch = db.query(Branch).filter(Branch.id == db_user.branch_id).first() if db_user.branch_id else None
+    return serialize_user(db_user, branch)
 
 @app.post("/branches/")
 def create_branch(branch: BranchCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
@@ -946,6 +812,13 @@ def get_branches(request: Request, db: Session = Depends(get_db), current_user: 
         if include_employee_count:
             employee_count = db.query(func.count(User.id)).filter(User.branch_id == branch.id).scalar() or 0
             branch_data['employee_count'] = employee_count
+        else:
+            employee_count = 0
+        branch_data["status"] = compute_branch_status(branch, employee_count)
+        branch_data["balance"] = {
+            "SYP": branch.allocated_amount_syp or 0,
+            "USD": branch.allocated_amount_usd or 0,
+        }
         if user_role == "director":
             branch_data.update({
                 "allocated_amount": branch.allocated_amount,
@@ -1060,47 +933,45 @@ def get_branch(branch_id: int, db: Session = Depends(get_db), current_user: dict
 def get_users(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
-    branch_id: Optional[int] = None,  # إضافة بارامتر branch_id
+    branch_id: Optional[int] = None,
+    role: Optional[str] = None,
+    search: Optional[str] = None,
     page: int = 1,
-    per_page: int = 20
+    per_page: int = 100,
 ):
-    # التحقق من الصلاحيات
     if current_user["role"] not in ["director", "branch_manager"]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions")
+
     query = db.query(User)
-    # إذا كان المستخدم مدير فرع، قصر النتائج على فرعه
     if current_user["role"] == "branch_manager":
         query = query.filter(User.branch_id == current_user["branch_id"])
-    # تطبيق تصفية branch_id إذا تم تقديمه
+
     if branch_id:
-        # المديرين الفرعيين لا يمكنهم طلب فروع أخرى
         if current_user["role"] == "branch_manager" and branch_id != current_user["branch_id"]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only view your branch's employees")
         query = query.filter(User.branch_id == branch_id)
+
+    if role and role != "all":
+        query = query.filter(User.role == role)
+
+    if search:
+        term = f"%{search.strip()}%"
+        query = query.filter(or_(User.username.ilike(term)))
+
     total = query.count()
-    query = query.order_by(User.created_at.desc())
-    query = query.offset((page - 1) * per_page).limit(per_page)
-    users = query.all()
-    user_list = []
-    for user in users:
-        branch_name = None
-        if user.branch_id:
-            branch = db.query(Branch).filter(Branch.id == user.branch_id).first()
-            branch_name = branch.name if branch else None
-        user_list.append({
-            "id": user.id,
-            "username": user.username,
-            "role": user.role,
-            "branch_id": user.branch_id,
-            "branch_name": branch_name,
-            "created_at": user.created_at.strftime("%Y-%m-%d %H:%M:%S") if user.created_at else None
-        })
+    users = (
+        query.order_by(User.created_at.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
+    user_list = serialize_users(db, users)
     return {
         "items": user_list,
         "total": total,
         "page": page,
         "per_page": per_page,
-        "total_pages": (total + per_page - 1) // per_page
+        "total_pages": max(1, (total + per_page - 1) // per_page),
     }
 
 @app.get("/employees/")
@@ -1276,33 +1147,13 @@ def get_transactions(
         results = query.all()
         transaction_list = []
         for transaction, sending_branch_name, destination_branch_name in results:
-            transaction_dict = {
-                "id": transaction.id,
-                "sender": transaction.sender,
-                "sender_mobile": transaction.sender_mobile,
-                "sender_governorate": transaction.sender_governorate,
-                "receiver": transaction.receiver,
-                "receiver_mobile": transaction.receiver_mobile,
-                "receiver_governorate": transaction.receiver_governorate,
-                "amount": transaction.amount,
-                "base_amount": transaction.base_amount,
-                "benefited_amount": transaction.benefited_amount,
-                "tax_rate": transaction.tax_rate,
-                "tax_amount": transaction.tax_amount,
-                "currency": transaction.currency,
-                "message": transaction.message,
-                "employee_name": transaction.employee_name,
-                "branch_governorate": transaction.branch_governorate,
-                "branch_id": transaction.branch_id,
-                "destination_branch_id": transaction.destination_branch_id,
-                "employee_id": transaction.employee_id,
-                "status": transaction.status,
-                "date": transaction.date,
-                "is_received": transaction.is_received,
-                "sending_branch_name": sending_branch_name,
-                "destination_branch_name": destination_branch_name
-            }
-            transaction_list.append(transaction_dict)
+            transaction_list.append(
+                serialize_transaction(
+                    transaction,
+                    sending_branch_name=sending_branch_name,
+                    destination_branch_name=destination_branch_name,
+                )
+            )
 
         return {
             "items": transaction_list,
@@ -1321,191 +1172,6 @@ def get_transactions(
         raise HTTPException(
             status_code=500,
             detail=f"Unexpected error occurred: {str(e)}"
-        )
-
-@app.get("/reports/transactions/")
-def get_transactions_report(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-    start_date: str = None,
-    end_date: str = None,
-    branch_id: int = None,
-    destination_branch_id: int = None,
-    status: str = None,
-    page: int = 1,
-    per_page: int = 10
-):
-    try:
-        # Authorization check
-        if current_user["role"] not in ["director", "branch_manager"]:
-            raise HTTPException(status_code=403, detail="Not enough permissions")
-
-        # Branch managers can only access their branch's data
-        if current_user["role"] == "branch_manager":
-            # إذا كان يبحث عن صادر (branch_id)، يجب أن يكون فرعه فقط
-            if branch_id is not None:
-                if branch_id != current_user["branch_id"]:
-                    raise HTTPException(status_code=403, detail="Can only access your branch's data")
-                branch_id = current_user["branch_id"]
-
-        # Calculate offset for pagination
-        offset = (page - 1) * per_page
-
-        # Build base query with joins for branch names
-        SendingBranch = aliased(Branch)
-        DestinationBranch = aliased(Branch)
-        
-        query = db.query(
-            Transaction,
-            SendingBranch.name.label('sending_branch_name'),
-            DestinationBranch.name.label('destination_branch_name')
-        ).outerjoin(
-            SendingBranch, Transaction.branch_id == SendingBranch.id
-        ).outerjoin(
-            DestinationBranch, Transaction.destination_branch_id == DestinationBranch.id
-        )
-
-        # Add filters
-        if branch_id:
-            query = query.filter(Transaction.branch_id == branch_id)
-        if destination_branch_id:
-            query = query.filter(Transaction.destination_branch_id == destination_branch_id)
-        if status:
-            query = query.filter(Transaction.status == status)
-        if start_date:
-            try:
-                start = datetime.strptime(start_date, "%Y-%m-%d")
-                query = query.filter(Transaction.date >= start)
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD")
-        if end_date:
-            try:
-                end = datetime.strptime(end_date, "%Y-%m-%d")
-                end = end.replace(hour=23, minute=59, second=59)
-                query = query.filter(Transaction.date <= end)
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid end_date format. Use YYYY-MM-DD")
-
-        # Get total count for pagination
-        total = query.count()
-
-        # Add sorting and pagination
-        query = query.order_by(Transaction.date.desc())
-        query = query.offset(offset).limit(per_page)
-
-        # Execute query
-        results = query.all()
-
-        # Format results
-        transactions = []
-        for transaction, sending_branch_name, destination_branch_name in results:
-            transaction_dict = {
-                "id": transaction.id,
-                "sender": transaction.sender,
-                "receiver": transaction.receiver,
-                "amount": transaction.amount,
-                "currency": transaction.currency,
-                "date": transaction.date.isoformat(),
-                "status": transaction.status,
-                "branch_id": transaction.branch_id,
-                "destination_branch_id": transaction.destination_branch_id,
-                "employee_name": transaction.employee_name,
-                "sending_branch_name": sending_branch_name or "غير معروف",
-                "destination_branch_name": destination_branch_name or "غير معروف",
-                "branch_governorate": transaction.branch_governorate,
-                "is_received": transaction.is_received,
-                "tax_amount": transaction.tax_amount,
-                "tax_rate": transaction.tax_rate,
-                "benefited_amount": transaction.benefited_amount
-            }
-            transactions.append(transaction_dict)
-
-        return {
-            "items": transactions,
-            "total": total,
-            "page": page,
-            "per_page": per_page,
-            "total_pages": (total + per_page - 1) // per_page
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in get_transactions_report: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
-
-@app.get("/reports/employees/")
-def get_employees_report(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-    branch_id: int = None,
-    status: str = None,
-    role: str = None,
-    page: int = 1,
-    per_page: int = 10
-):
-    try:
-        if current_user["role"] not in ["director", "branch_manager"]:
-            raise HTTPException(status_code=403, detail="Not enough permissions")
-
-        if current_user["role"] == "branch_manager":
-            if branch_id and branch_id != current_user["branch_id"]:
-                raise HTTPException(status_code=403, detail="Can only access your branch's data")
-            branch_id = current_user["branch_id"]
-
-        offset = (page - 1) * per_page
-
-        query = db.query(User).join(Branch, User.branch_id == Branch.id)
-
-        if branch_id:
-            query = query.filter(User.branch_id == branch_id)
-        if role:
-            query = query.filter(User.role == role)
-        # Only filter by is_active if status is not None
-        if status is not None:
-            # Some databases may not have is_active, so use getattr with default True
-            if status == "active":
-                query = query.filter(getattr(User, 'is_active', True) == True)
-            elif status == "inactive":
-                query = query.filter(getattr(User, 'is_active', True) == False)
-
-        total = query.count()
-        query = query.order_by(User.created_at.desc())
-        query = query.offset(offset).limit(per_page)
-        employees = query.all()
-
-        employee_list = []
-        for employee in employees:
-            branch = db.query(Branch).filter(Branch.id == employee.branch_id).first()
-            employee_dict = {
-                "id": employee.id,
-                "username": employee.username,
-                "role": employee.role,
-                "branch_id": employee.branch_id,
-                "branch_name": branch.name if branch else "غير معروف",
-                "created_at": employee.created_at.isoformat() if employee.created_at else None,
-                "is_active": getattr(employee, 'is_active', True)
-            }
-            employee_list.append(employee_dict)
-
-        return {
-            "items": employee_list,
-            "total": total,
-            "page": page,
-            "per_page": per_page,
-            "total_pages": (total + per_page - 1) // per_page
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in get_employees_report: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
         )
 
 @app.put("/users/{user_id}")
@@ -1554,12 +1220,8 @@ async def update_user(
     db.commit()
     db.refresh(db_user)
     
-    return {
-        "id": db_user.id,
-        "username": db_user.username,
-        "role": db_user.role,
-        "branch_id": db_user.branch_id
-    }
+    branch = db.query(Branch).filter(Branch.id == db_user.branch_id).first() if db_user.branch_id else None
+    return serialize_user(db_user, branch)
 
 # Add this function to handle profit recording
 def record_branch_profit(db: Session, transaction: Transaction):
@@ -1703,58 +1365,19 @@ def update_transaction_status(
             detail=f"Unexpected error: {str(e)}"
         )
 
-@app.post("/reset-password/")
-def reset_password(reset_data: PasswordReset, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    # Only directors and branch managers can reset passwords
-    if current_user["role"] not in ["director", "branch_manager"]:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-    
-    # Find the user
-    user = db.query(User).filter(User.username == reset_data.username).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Branch managers can only reset passwords for employees in their branch
-    if current_user["role"] == "branch_manager" and (user.role != "employee" or user.branch_id != current_user["branch_id"]):
-        raise HTTPException(status_code=403, detail="You can only reset passwords for employees in your branch")
-    
-    # Update password
-    user.password = hash_password(reset_data.new_password)
-    db.commit()
-    
-    return {"status": "success", "message": "Password reset successfully"}
-
-@app.post("/change-password/")
-def change_password(password_data: ChangePassword, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    # Find the user
-    user = db.query(User).filter(User.username == current_user["username"]).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Verify old password
-    if not verify_password(password_data.old_password, user.password):
-        raise HTTPException(status_code=400, detail="Incorrect old password")
-    
-    # Update password
-    user.password = hash_password(password_data.new_password)
-    db.commit()
-    
-    return {"status": "success", "message": "Password changed successfully"}
-
 @app.delete("/users/{user_id}")
 def delete_user(user_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     require_role(current_user, ["director", "branch_manager"])
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if user.role == "director":
-        raise HTTPException(status_code=403, detail="Directors cannot be deleted")
-    if current_user["role"] == "branch_manager":
-        if user.role != "employee" or user.branch_id != current_user["branch_id"]:
-            raise HTTPException(status_code=403, detail="You can only delete employees in your branch")
+    try:
+        validate_user_delete(current_user, user)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     db.delete(user)
     db.commit()
-    return {"status": "success", "message": "User deleted successfully"}
+    return {"status": "success", "message": "User deleted successfully", "id": user_id}
 
 @app.delete("/branches/{branch_id}/")
 def delete_branch(branch_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
@@ -1972,37 +1595,13 @@ def get_transaction(transaction_id: str, db: Session = Depends(get_db), current_
     if not result:
         raise HTTPException(status_code=404, detail="Transaction not found")
     transaction, sending_branch_name, destination_branch_name = result
-    # Branch managers can only view transactions from their branch
     if current_user["role"] == "branch_manager" and transaction.branch_id != current_user["branch_id"]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only view transactions from your branch")
-    # Convert transaction to dictionary
-    transaction_dict = {
-        "id": transaction.id,
-        "sender": transaction.sender,
-        "sender_mobile": transaction.sender_mobile,
-        "sender_governorate": transaction.sender_governorate,
-        "receiver": transaction.receiver,
-        "receiver_mobile": transaction.receiver_mobile,
-        "receiver_governorate": transaction.receiver_governorate,
-        "amount": transaction.amount,
-        "base_amount": transaction.base_amount,
-        "benefited_amount": transaction.benefited_amount,
-        "tax_rate": transaction.tax_rate,
-        "tax_amount": transaction.tax_amount,
-        "currency": transaction.currency,
-        "message": transaction.message,
-        "employee_name": transaction.employee_name,
-        "branch_governorate": transaction.branch_governorate,
-        "branch_id": transaction.branch_id,
-        "destination_branch_id": transaction.destination_branch_id,
-        "employee_id": transaction.employee_id,
-        "status": transaction.status,
-        "date": transaction.date,
-        "is_received": transaction.is_received,
-        "sending_branch_name": "المركزية" if transaction.branch_id in [0, None] else sending_branch_name,
-        "destination_branch_name": destination_branch_name
-    }
-    return transaction_dict
+    return serialize_transaction(
+        transaction,
+        sending_branch_name="المركزية" if transaction.branch_id in [0, None] else sending_branch_name,
+        destination_branch_name=destination_branch_name,
+    )
 
 @app.get("/notifications/")
 def get_notifications(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
@@ -2327,42 +1926,43 @@ def tax_summary_endpoint(
         )
 
 @app.get("/backup/")
-def download_backup(current_user: dict = Depends(get_current_user)):
-    # السماح فقط للمديرين
+def download_backup(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    format: str = "json",
+):
     if current_user["role"] != "director":
         raise HTTPException(status_code=403, detail="Director access required")
-    db_path = "transactions.db"
-    backup_path = "system_backup_temp.sqlite"
-    # عمل نسخة مؤقتة حتى لا تتعارض مع عمليات الكتابة
+
     try:
-        shutil.copyfile(db_path, backup_path)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Backup failed: {str(e)}")
-    response = FileResponse(backup_path, filename="system_backup.sqlite", media_type="application/octet-stream")
-    # حذف الملف المؤقت بعد الإرسال
-    import os
-    from starlette.background import BackgroundTask
-    response.background = BackgroundTask(lambda: os.remove(backup_path))
+        if format == "sql":
+            backup_path = create_sql_backup()
+            filename = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.sql"
+            media_type = "application/sql"
+        else:
+            backup_path = create_json_backup(db)
+            filename = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            media_type = "application/json"
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    response = FileResponse(backup_path, filename=filename, media_type=media_type)
+    response.background = BackgroundTask(lambda: os.remove(backup_path) if os.path.exists(backup_path) else None)
     return response
+
 
 @app.post("/restore/")
 async def restore_backup(
     file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     if current_user["role"] != "director":
         raise HTTPException(status_code=403, detail="Director access required")
-    db_path = "transactions.db"
-    try:
-        # احفظ الملف المرفوع مؤقتاً
-        temp_path = "restore_temp.sqlite"
-        with open(temp_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        # استبدل قاعدة البيانات القديمة بالجديدة
-        shutil.move(temp_path, db_path)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Restore failed: {str(e)}")
-    return {"status": "success", "message": "تمت الاستعادة بنجاح"}
+
+    raise HTTPException(
+        status_code=501,
+        detail="Restore via API is disabled for safety. Use pg_restore or re-seed demo data.",
+    )
 
 @app.get("/financial/total/")
 def get_total_financial_stats(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
@@ -2681,75 +2281,3 @@ def require_role(current_user, allowed_roles):
 def require_branch_access(current_user, branch_id):
     if current_user["role"] == "branch_manager" and current_user["branch_id"] != branch_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="يمكنك فقط إدارة فرعك.")
-
-@app.get("/reports/daily/")
-def get_daily_summary(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-    start_date: str = None,
-    end_date: str = None
-):
-    from datetime import datetime
-    # إذا لم يتم تمرير start_date أو end_date، اجعلها تساوي تاريخ اليوم
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    if not start_date:
-        start_date = today_str
-    if not end_date:
-        end_date = today_str
-    query = db.query(Transaction)
-    try:
-        start = datetime.strptime(start_date, "%Y-%m-%d")
-        query = query.filter(Transaction.date >= start)
-    except ValueError:
-        pass
-    try:
-        end = datetime.strptime(end_date, "%Y-%m-%d")
-        end = end.replace(hour=23, minute=59, second=59)
-        query = query.filter(Transaction.date <= end)
-    except ValueError:
-        pass
-    # Branch managers can only see their branch's data
-    if current_user["role"] == "branch_manager":
-        query = query.filter(Transaction.branch_id == current_user["branch_id"])
-    transactions = query.all()
-    total_count = len(transactions)
-    total_amount = sum(tx.amount or 0 for tx in transactions)
-    total_tax = sum(tx.tax_amount or 0 for tx in transactions)
-    completed_count = sum(1 for tx in transactions if tx.status == "completed")
-    processing_count = sum(1 for tx in transactions if tx.status == "processing")
-    cancelled_count = sum(1 for tx in transactions if tx.status == "cancelled")
-    rejected_count = sum(1 for tx in transactions if tx.status == "rejected")
-    pending_count = sum(1 for tx in transactions if tx.status == "pending")
-    return {
-        "summary": {
-            "total_count": total_count,
-            "total_amount": total_amount,
-            "total_tax": total_tax,
-            "completed_count": completed_count,
-            "processing_count": processing_count,
-            "cancelled_count": cancelled_count,
-            "rejected_count": rejected_count,
-            "pending_count": pending_count
-        }
-    }
-
-settings_router = APIRouter()
-
-system_settings = {
-    "systemName": "مكتب الجاسم للحوالات",
-    "companyName": "اسم الشركة",
-    "adminEmail": "admin@example.com",
-    "defaultCurrency": "ليرة سورية",
-    "mainPhone": ""
-}
-
-@settings_router.get("/settings/system/")
-def get_system_settings():
-    return system_settings
-
-@settings_router.put("/settings/system/")
-def update_system_settings(new_settings: dict):
-    system_settings.update(new_settings)
-    return system_settings
-
-app.include_router(settings_router)

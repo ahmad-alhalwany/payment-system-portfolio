@@ -1,8 +1,11 @@
 "use client";
-import React, { useState, useEffect } from "react";
-import axiosInstance from "@/app/api/axios";
-import { branchesApi } from "@/app/api/branches";
+
+import React, { useState, useEffect, useCallback } from "react";
+import { Send, User, Users, Banknote } from "lucide-react";
 import Modal from "@/components/Modal";
+import TransferPreviewPanel, { type TransferPreviewData } from "@/components/money-transfer/TransferPreviewPanel";
+import { transactionsApi } from "@/app/api/transactions";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 interface Branch {
   id: number;
@@ -10,24 +13,10 @@ interface Branch {
   governorate: string;
 }
 
-interface Governorate {
-  id: number;
-  name: string;
-}
-
-interface Currency {
-  id: number;
-  code: string;
-  name: string;
-  symbol: string;
-}
-
-const TAX_RATE = 0.1; // نسبة الضريبة 10%
-
 interface NewTransferFormProps {
   onSubmit: (transfer: {
-    sender: any;
-    receiver: any;
+    sender: { name: string; mobile: string; governorate: string; address: string; location: string };
+    receiver: { name: string; mobile: string; governorate: string };
     amount: number;
     benefitAmount?: number;
     currency: string;
@@ -39,92 +28,92 @@ interface NewTransferFormProps {
   currentBranch: Branch | null;
 }
 
-// أضف القوائم الثابتة للمحافظات والعملات
 const GOVERNORATES = [
   "دمشق", "ريف دمشق", "حلب", "حمص", "حماة", "اللاذقية", "طرطوس",
-  "إدلب", "دير الزور", "الرقة", "الحسكة", "السويداء", "درعا", "القنيطرة"
-];
-const CURRENCIES = [
-  { code: "SYP", name: "ليرة سورية" },
-  { code: "USD", name: "دولار أمريكي" }
+  "إدلب", "دير الزور", "الرقة", "الحسكة", "السويداء", "درعا", "القنيطرة",
 ];
 
+const CURRENCIES = [
+  { code: "SYP" as const, labelKey: "syp" as const },
+  { code: "USD" as const, labelKey: "usd" as const },
+];
+
+const inputClass =
+  "w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500/30 text-sm transition-shadow";
+
 export default function NewTransferForm({ onSubmit, branches, currentBranch }: NewTransferFormProps) {
-  // حالة الحقول
-  const [sender, setSender] = useState({
-    name: "",
-    mobile: "",
-    governorate: "",
-    address: "",
-    location: "",
-  });
-  const [receiver, setReceiver] = useState({
-    name: "",
-    mobile: "",
-    governorate: "",
-  });
+  const { t } = useLocale();
+  const f = t.dashboard.moneyTransfer.form;
+
+  const [sender, setSender] = useState({ name: "", mobile: "", governorate: GOVERNORATES[0], address: "", location: "" });
+  const [receiver, setReceiver] = useState({ name: "", mobile: "", governorate: GOVERNORATES[0] });
   const [amount, setAmount] = useState("");
   const [benefitAmount, setBenefitAmount] = useState("");
-  const [currency, setCurrency] = useState("");
+  const [currency, setCurrency] = useState<"SYP" | "USD">("SYP");
   const [branch, setBranch] = useState("");
   const [message, setMessage] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
-  const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
-  const [availableBalance, setAvailableBalance] = useState<number | null>(null);
-  const [balanceLoading, setBalanceLoading] = useState(false);
   const [showErrorModal, setShowErrorModal] = useState(false);
+  const [preview, setPreview] = useState<TransferPreviewData | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
-  // عند تهيئة النموذج، عيّن القيم الافتراضية:
-  useEffect(() => {
-    setCurrency(CURRENCIES[0].code);
-    setSender(prev => ({ ...prev, governorate: GOVERNORATES[0] }));
-    setReceiver(prev => ({ ...prev, governorate: GOVERNORATES[0] }));
+  const resetForm = useCallback(() => {
+    setSender({ name: "", mobile: "", governorate: GOVERNORATES[0], address: "", location: "" });
+    setReceiver({ name: "", mobile: "", governorate: GOVERNORATES[0] });
+    setAmount("");
+    setBenefitAmount("");
+    setCurrency("SYP");
+    setBranch("");
+    setMessage("");
+    setPreview(null);
   }, []);
 
-  // جلب رصيد الفرع عند تغيير العملة أو عند تحميل النموذج
-  useEffect(() => {
-    async function fetchBalance() {
-      if (!currentBranch?.id) return;
-      setBalanceLoading(true);
-      try {
-        const branch = await branchesApi.getBranch(currentBranch.id);
-        if (currency === "USD") {
-          setAvailableBalance(branch.allocated_amount_usd ?? null);
-        } else {
-          setAvailableBalance(branch.allocated_amount_syp ?? null);
-        }
-      } catch (e) {
-        setAvailableBalance(null);
-      } finally {
-        setBalanceLoading(false);
-      }
+  const fetchPreview = useCallback(async () => {
+    const numAmount = parseFloat(amount);
+    if (!numAmount || numAmount <= 0) {
+      setPreview(null);
+      return;
     }
-    fetchBalance();
-  }, [currentBranch?.id, currency]);
+    setPreviewLoading(true);
+    try {
+      const benefited = benefitAmount ? parseFloat(benefitAmount) : numAmount;
+      const data = await transactionsApi.previewTransfer({
+        amount: numAmount,
+        benefited_amount: benefited,
+        currency,
+        sending_branch_id: currentBranch?.id,
+        destination_branch_id: branch ? parseInt(branch, 10) : undefined,
+      });
+      setPreview(data);
+    } catch {
+      setPreview(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [amount, benefitAmount, currency, currentBranch?.id, branch]);
 
-  // حساب الضريبة والربح
-  const benefit = parseFloat(benefitAmount) || 0;
-  const tax = benefit > 0 ? benefit * TAX_RATE : 0;
-  const branchProfit = benefit > 0 ? benefit - tax : 0;
+  useEffect(() => {
+    const timer = setTimeout(fetchPreview, 400);
+    return () => clearTimeout(timer);
+  }, [fetchPreview]);
 
-  // تحقق مبدئي من صحة البيانات مع الرصيد
   const validate = () => {
-    const errs = [];
-    if (sender.mobile && !/^\d{9,10}$/.test(sender.mobile)) errs.push("رقم هاتف المرسل يجب أن يكون 9-10 أرقام");
-    if (!receiver.name) errs.push("اسم المستلم مطلوب");
-    if (receiver.mobile && !/^\d{9,10}$/.test(receiver.mobile)) errs.push("رقم هاتف المستلم يجب أن يكون 9-10 أرقام");
-    if (!amount || isNaN(Number(amount))) errs.push("المبلغ غير صالح");
-    if (!currency) errs.push("العملة مطلوبة");
-    if (!branch) errs.push("يجب اختيار الفرع المستلم");
+    const errs: string[] = [];
+    if (sender.mobile && !/^\d{9,10}$/.test(sender.mobile)) errs.push(`${f.senderMobile}: 9-10 digits`);
+    if (!receiver.name.trim()) errs.push(`${f.receiverName} ${f.required}`);
+    if (receiver.mobile && !/^\d{9,10}$/.test(receiver.mobile)) errs.push(`${f.receiverMobile}: 9-10 digits`);
+    const numAmount = parseFloat(amount);
+    if (!amount || isNaN(numAmount) || numAmount <= 0) errs.push(`${f.amount} ${f.required}`);
+    if (!currency) errs.push(`${f.currency} ${f.required}`);
+    if (!branch) errs.push(`${f.destBranch} ${f.required}`);
+    if (preview && !preview.valid) errs.push(...preview.errors);
     return errs;
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setErrors([]);
-    setSuccess("");
     const errs = validate();
     if (errs.length > 0) {
       setErrors(errs);
@@ -134,325 +123,222 @@ export default function NewTransferForm({ onSubmit, branches, currentBranch }: N
     setShowConfirm(true);
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     setLoading(true);
-    onSubmit({
-      sender,
-      receiver,
-      amount: Number(amount),
-      benefitAmount: benefitAmount ? Number(benefitAmount) : undefined,
-      currency,
-      branch,
-      message,
-      resetForm: () => {
-        setSender({
-          name: "",
-          mobile: "",
-          governorate: GOVERNORATES[0],
-          address: "",
-          location: "",
-        });
-        setReceiver({
-          name: "",
-          mobile: "",
-          governorate: GOVERNORATES[0],
-        });
-        setAmount("");
-        setBenefitAmount("");
-        setCurrency(CURRENCIES[0].code);
-        setBranch("");
-        setMessage("");
-      }
-    });
-    setLoading(false);
-    setShowConfirm(false);
+    try {
+      await onSubmit({
+        sender,
+        receiver,
+        amount: Number(amount),
+        benefitAmount: benefitAmount ? Number(benefitAmount) : undefined,
+        currency,
+        branch,
+        message,
+        resetForm,
+      });
+      setShowConfirm(false);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // ملخص التحويل
-  const summary = (
-    <div className="space-y-4">
-      <h2 className="text-xl font-bold text-primary-700 mb-2 text-center">تأكيد بيانات التحويل</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {sender.name && (
-          <div>
-            <div className="font-semibold mb-1">اسم المرسل:</div>
-            <div className="bg-gray-50 rounded p-2 border">{sender.name}</div>
-          </div>
-        )}
-        {sender.mobile && (
-          <div>
-            <div className="font-semibold mb-1">رقم هاتف المرسل:</div>
-            <div className="bg-gray-50 rounded p-2 border">{sender.mobile}</div>
-          </div>
-        )}
-        <div>
-          <div className="font-semibold mb-1">محافظة المرسل:</div>
-          <div className="bg-gray-50 rounded p-2 border">{sender.governorate}</div>
-        </div>
-        <div>
-          <div className="font-semibold mb-1">اسم المستلم:</div>
-          <div className="bg-gray-50 rounded p-2 border">{receiver.name}</div>
-        </div>
-        {receiver.mobile && (
-          <div>
-            <div className="font-semibold mb-1">رقم هاتف المستلم:</div>
-            <div className="bg-gray-50 rounded p-2 border">{receiver.mobile}</div>
-          </div>
-        )}
-        <div>
-          <div className="font-semibold mb-1">محافظة المستلم:</div>
-          <div className="bg-gray-50 rounded p-2 border">{receiver.governorate}</div>
-        </div>
-        <div>
-          <div className="font-semibold mb-1">المبلغ:</div>
-          <div className="bg-gray-50 rounded p-2 border">{amount} {currency}</div>
-          {balanceLoading ? (
-            <div className="text-xs text-gray-500">جاري جلب الرصيد...</div>
-          ) : availableBalance !== null && (
-            <div className="text-xs text-gray-600">الرصيد المتاح: {availableBalance.toLocaleString()} {currency}</div>
-          )}
-        </div>
-        <div>
-          <div className="font-semibold mb-1">المبلغ المستفاد:</div>
-          <div className="bg-gray-50 rounded p-2 border">{benefitAmount || <span className="text-gray-400">غير محدد</span>}</div>
-        </div>
-        <div>
-          <div className="font-semibold mb-1">الضريبة ({TAX_RATE * 100}%):</div>
-          <div className="bg-yellow-50 rounded p-2 border font-bold text-yellow-700">{benefitAmount ? tax.toLocaleString(undefined, {maximumFractionDigits:2}) : <span className='text-gray-400'>غير محسوبة</span>}</div>
-        </div>
-        <div>
-          <div className="font-semibold mb-1">ربح الفرع:</div>
-          <div className="bg-green-50 rounded p-2 border font-bold text-green-700">{benefitAmount ? branchProfit.toLocaleString(undefined, {maximumFractionDigits:2}) : <span className='text-gray-400'>غير محسوب</span>}</div>
-        </div>
-        <div>
-          <div className="font-semibold mb-1">الفرع المستلم:</div>
-          <div className="bg-gray-50 rounded p-2 border">{branch}</div>
-        </div>
-        <div>
-          <div className="font-semibold mb-1">رسالة:</div>
-          <div className="bg-gray-50 rounded p-2 border">{message || <span className="text-gray-400">لا يوجد</span>}</div>
-        </div>
-      </div>
-      <div className="flex justify-center gap-4 mt-6">
-        <button
-          className="bg-gray-400 text-white px-6 py-2 rounded-lg font-bold hover:bg-gray-500 transition"
-          onClick={() => setShowConfirm(false)}
-          type="button"
-          disabled={loading}
-        >
-          إلغاء
-        </button>
-        <button
-          className="bg-primary-600 text-white px-8 py-2 rounded-lg font-bold hover:bg-primary-700 transition"
-          onClick={handleConfirm}
-          type="button"
-          disabled={loading}
-        >
-          {loading ? "جاري الإرسال..." : "تأكيد الإرسال"}
-        </button>
-      </div>
+  const currencyLabel = (code: "SYP" | "USD") =>
+    code === "SYP" ? "(SYP) Syrian Lira" : "(USD) US Dollar";
+
+  const destBranches = branches.filter((b) => b.governorate === receiver.governorate);
+
+  const SectionHeader = ({ icon: Icon, title }: { icon: React.ComponentType<{ className?: string }>; title: string }) => (
+    <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-white/10 mb-4">
+      <Icon className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+      <h2 className="text-lg font-bold text-slate-900 dark:text-white">{title}</h2>
     </div>
   );
 
+  const Field = ({
+    label,
+    required,
+    optional,
+    children,
+  }: {
+    label: string;
+    required?: boolean;
+    optional?: boolean;
+    children: React.ReactNode;
+  }) => (
+    <div className="flex flex-col gap-1.5">
+      <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+        {label}
+        {required && <span className="text-red-500 ms-1">*</span>}
+        {optional && <span className="text-slate-400 text-xs ms-1">({f.optional})</span>}
+      </label>
+      {children}
+    </div>
+  );
+
+  if (showConfirm) {
+    return (
+      <div className="space-y-6">
+        <h2 className="text-xl font-bold text-center text-slate-900 dark:text-white">{f.confirmTitle}</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+          {sender.name && <ConfirmRow label={f.senderName} value={sender.name} />}
+          {sender.mobile && <ConfirmRow label={f.senderMobile} value={sender.mobile} />}
+          <ConfirmRow label={f.governorate} value={sender.governorate} />
+          <ConfirmRow label={f.receiverName} value={receiver.name} />
+          {receiver.mobile && <ConfirmRow label={f.receiverMobile} value={receiver.mobile} />}
+          <ConfirmRow label={f.governorate} value={receiver.governorate} />
+          <ConfirmRow label={f.amount} value={`${amount} ${currency}`} />
+          <ConfirmRow label={f.benefitAmount} value={benefitAmount || amount} />
+          {preview && (
+            <>
+              <ConfirmRow label={t.dashboard.moneyTransfer.preview.taxRate} value={`${preview.tax_rate}%`} />
+              <ConfirmRow label={t.dashboard.moneyTransfer.preview.taxAmount} value={String(preview.tax_amount)} />
+              <ConfirmRow label={t.dashboard.moneyTransfer.preview.branchProfit} value={String(preview.branch_profit)} />
+            </>
+          )}
+          <ConfirmRow label={f.destBranch} value={destBranches.find((b) => String(b.id) === branch)?.name ?? branch} />
+          {message && <ConfirmRow label={f.message} value={message} />}
+        </div>
+        <div className="flex flex-col sm:flex-row justify-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowConfirm(false)}
+            disabled={loading}
+            className="px-6 py-3 rounded-xl bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-300 font-semibold hover:bg-slate-300 dark:hover:bg-white/15 transition-colors"
+          >
+            {f.cancel}
+          </button>
+          <button
+            type="button"
+            onClick={handleConfirm}
+            disabled={loading}
+            className="px-8 py-3 rounded-xl bg-primary-600 text-white font-semibold hover:bg-primary-500 transition-colors disabled:opacity-50"
+          >
+            {loading ? f.sending : f.confirm}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <form
-      className="max-w-full w-full mx-auto space-y-6 bg-white/90 rounded-2xl shadow-2xl p-4 md:p-8 border border-primary-100 backdrop-blur-md"
-      style={{ boxShadow: '0 8px 32px #1976d220' }}
-      onSubmit={handleSubmit}
-    >
+    <form onSubmit={handleSubmit} className="space-y-8">
       <Modal open={showErrorModal} onClose={() => setShowErrorModal(false)}>
-        <div className="text-red-700 text-lg font-bold mb-2 text-center">حدث خطأ</div>
-        <ul className="list-disc pr-5 text-right text-base">
-          {errors.map((err, i) => <li key={i}>{err}</li>)}
+        <div className="text-red-600 dark:text-red-400 text-lg font-bold mb-3 text-center">{f.errorTitle}</div>
+        <ul className="list-disc ps-5 space-y-1 text-sm text-slate-700 dark:text-slate-300">
+          {errors.map((err, i) => (
+            <li key={i}>{err}</li>
+          ))}
         </ul>
         <button
-          className="mt-4 bg-primary-500 text-white px-8 py-2 rounded-xl font-bold hover:bg-primary-600 transition text-lg w-full shadow-md"
+          type="button"
+          className="mt-4 w-full py-2.5 rounded-xl bg-primary-600 text-white font-semibold hover:bg-primary-500"
           onClick={() => setShowErrorModal(false)}
         >
-          إغلاق
+          {f.close}
         </button>
       </Modal>
-      {showConfirm ? (
-        <div className="space-y-4">
-          <h2 className="text-2xl font-extrabold text-primary-700 mb-2 text-center tracking-wide drop-shadow-sm">تأكيد بيانات التحويل</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {sender.name && (
-              <div>
-                <div className="font-semibold mb-1 text-primary-700">اسم المرسل:</div>
-                <div className="bg-gray-50 rounded-xl p-3 border border-primary-100 shadow-sm text-lg font-bold">{sender.name}</div>
-              </div>
-            )}
-            <div>
-              <div className="font-semibold mb-1 text-primary-700">رقم هاتف المرسل:</div>
-              <div className="bg-gray-50 rounded-xl p-3 border border-primary-100 shadow-sm text-lg font-bold">{sender.mobile}</div>
-            </div>
-            <div>
-              <div className="font-semibold mb-1 text-primary-700">محافظة المرسل:</div>
-              <div className="bg-gray-50 rounded-xl p-3 border border-primary-100 shadow-sm text-lg font-bold">{sender.governorate}</div>
-            </div>
-            <div>
-              <div className="font-semibold mb-1 text-primary-700">اسم المستلم:</div>
-              <div className="bg-gray-50 rounded-xl p-3 border border-primary-100 shadow-sm text-lg font-bold">{receiver.name}</div>
-            </div>
-            {receiver.mobile && (
-              <div>
-                <div className="font-semibold mb-1 text-primary-700">رقم هاتف المستلم:</div>
-                <div className="bg-gray-50 rounded-xl p-3 border border-primary-100 shadow-sm text-lg font-bold">{receiver.mobile}</div>
-              </div>
-            )}
-            <div>
-              <div className="font-semibold mb-1 text-primary-700">محافظة المستلم:</div>
-              <div className="bg-gray-50 rounded-xl p-3 border border-primary-100 shadow-sm text-lg font-bold">{receiver.governorate}</div>
-            </div>
-            <div>
-              <div className="font-semibold mb-1 text-primary-700">المبلغ:</div>
-              <div className="bg-gray-50 rounded-xl p-3 border border-primary-100 shadow-sm text-lg font-bold">{amount} {currency}</div>
-              {balanceLoading ? (
-                <div className="text-xs text-gray-500 mt-1">جاري جلب الرصيد...</div>
-              ) : availableBalance !== null && (
-                <div className="text-xs text-gray-600 mt-1">الرصيد المتاح: {availableBalance.toLocaleString()} {currency}</div>
-              )}
-            </div>
-            <div>
-              <div className="font-semibold mb-1 text-primary-700">المبلغ المستفاد:</div>
-              <div className="bg-gray-50 rounded-xl p-3 border border-primary-100 shadow-sm text-lg font-bold">{benefitAmount || <span className="text-gray-400">غير محدد</span>}</div>
-            </div>
-            <div>
-              <div className="font-semibold mb-1 text-primary-700">الضريبة ({TAX_RATE * 100}%):</div>
-              <div className="bg-yellow-50 rounded-xl p-3 border font-bold text-yellow-700 border-yellow-200 shadow-sm">{benefitAmount ? tax.toLocaleString(undefined, {maximumFractionDigits:2}) : <span className='text-gray-400'>غير محسوبة</span>}</div>
-            </div>
-            <div>
-              <div className="font-semibold mb-1 text-primary-700">ربح الفرع:</div>
-              <div className="bg-green-50 rounded-xl p-3 border font-bold text-green-700 border-green-200 shadow-sm">{benefitAmount ? branchProfit.toLocaleString(undefined, {maximumFractionDigits:2}) : <span className='text-gray-400'>غير محسوب</span>}</div>
-            </div>
-            <div>
-              <div className="font-semibold mb-1 text-primary-700">الفرع المستلم:</div>
-              <div className="bg-gray-50 rounded-xl p-3 border border-primary-100 shadow-sm text-lg font-bold">{branch}</div>
-            </div>
-            <div>
-              <div className="font-semibold mb-1 text-primary-700">رسالة:</div>
-              <div className="bg-gray-50 rounded-xl p-3 border border-primary-100 shadow-sm text-lg font-bold">{message || <span className="text-gray-400">لا يوجد</span>}</div>
-            </div>
-          </div>
-          <div className="flex flex-col md:flex-row justify-center gap-4 mt-8">
-            <button
-              className="bg-gray-400 text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-500 transition text-lg shadow-md w-full md:w-auto"
-              onClick={() => setShowConfirm(false)}
-              type="button"
-              disabled={loading}
-            >
-              إلغاء
-            </button>
-            <button
-              className="bg-primary-600 text-white px-10 py-3 rounded-xl font-bold hover:bg-primary-700 transition text-lg shadow-md w-full md:w-auto"
-              onClick={handleConfirm}
-              type="button"
-              disabled={loading}
-            >
-              {loading ? "جاري الإرسال..." : "تأكيد الإرسال"}
-            </button>
-          </div>
+
+      <section>
+        <SectionHeader icon={User} title={f.senderSection} />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <Field label={f.senderName} optional>
+            <input className={inputClass} placeholder={f.senderName} value={sender.name} onChange={(e) => setSender({ ...sender, name: e.target.value })} />
+          </Field>
+          <Field label={f.senderMobile} optional>
+            <input className={inputClass} placeholder="9-10 digits" value={sender.mobile} onChange={(e) => setSender({ ...sender, mobile: e.target.value })} />
+          </Field>
+          <Field label={f.governorate} required>
+            <select className={inputClass} value={sender.governorate} onChange={(e) => setSender({ ...sender, governorate: e.target.value })} required>
+              {GOVERNORATES.map((g) => (
+                <option key={g} value={g}>{g}</option>
+              ))}
+            </select>
+          </Field>
         </div>
-      ) : (
-        <>
-          <h2 className="text-2xl font-extrabold text-primary-700 mb-4 text-center tracking-wide drop-shadow-sm">بيانات المرسل</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-6">
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-primary-700">اسم المرسل</label>
-              <input className="input-modern h-14 text-lg" placeholder="اسم المرسل (اختياري)" value={sender.name} onChange={e => setSender({ ...sender, name: e.target.value })} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-primary-700">رقم الهاتف</label>
-              <input className="input-modern h-14 text-lg" placeholder="رقم الهاتف (اختياري - 9-10 أرقام)" value={sender.mobile} onChange={e => setSender({ ...sender, mobile: e.target.value })} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-primary-700">المحافظة <span className="text-red-500">*</span></label>
-              <select className="input-modern h-14 text-lg" value={sender.governorate} onChange={e => setSender({ ...sender, governorate: e.target.value })} required>
-                {GOVERNORATES.map((g, index) => <option key={index} value={g}>{g}</option>)}
-              </select>
-            </div>
-          </div>
-          <h2 className="text-2xl font-extrabold text-primary-700 mb-4 text-center tracking-wide drop-shadow-sm">بيانات المستلم</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-6">
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-primary-700">اسم المستلم <span className="text-red-500">*</span></label>
-              <input className="input-modern h-14 text-lg" placeholder="اسم المستلم" value={receiver.name} onChange={e => setReceiver({ ...receiver, name: e.target.value })} required />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-primary-700">رقم الهاتف <span className="text-red-500">*</span></label>
-              <input className="input-modern h-14 text-lg" placeholder="رقم الهاتف (اختياري - 9-10 أرقام)" value={receiver.mobile} onChange={e => setReceiver({ ...receiver, mobile: e.target.value })} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-primary-700">المحافظة <span className="text-red-500">*</span></label>
-              <select className="input-modern h-14 text-lg" value={receiver.governorate} onChange={e => {
+      </section>
+
+      <section>
+        <SectionHeader icon={Users} title={f.receiverSection} />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <Field label={f.receiverName} required>
+            <input className={inputClass} value={receiver.name} onChange={(e) => setReceiver({ ...receiver, name: e.target.value })} required />
+          </Field>
+          <Field label={f.receiverMobile} optional>
+            <input className={inputClass} placeholder="9-10 digits" value={receiver.mobile} onChange={(e) => setReceiver({ ...receiver, mobile: e.target.value })} />
+          </Field>
+          <Field label={f.governorate} required>
+            <select
+              className={inputClass}
+              value={receiver.governorate}
+              onChange={(e) => {
                 setReceiver({ ...receiver, governorate: e.target.value });
                 setBranch("");
-              }} required>
-                {GOVERNORATES.map((g, index) => <option key={index} value={g}>{g}</option>)}
-              </select>
-            </div>
-          </div>
-          <h2 className="text-2xl font-extrabold text-primary-700 mb-4 text-center tracking-wide drop-shadow-sm">تفاصيل التحويل</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-6">
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-primary-700">المبلغ <span className="text-red-500">*</span></label>
-              <input className="input-modern h-14 text-lg" placeholder="المبلغ" value={amount} onChange={e => setAmount(e.target.value)} required />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-primary-700">المبلغ المستفاد <span className="text-gray-400">(اختياري، يطبق عليه الضريبة)</span></label>
-              <input className="input-modern h-14 text-lg" placeholder="المبلغ المستفاد (يطبق عليه الضريبة)" value={benefitAmount} onChange={e => setBenefitAmount(e.target.value)} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-primary-700">العملة <span className="text-red-500">*</span></label>
-              <select className="input-modern h-14 text-lg" value={currency} onChange={e => setCurrency(e.target.value)} required>
-                {CURRENCIES.map((c, index) => <option key={index} value={c.code}>{c.name} ({c.code})</option>)}
-              </select>
-            </div>
-            <div className="flex flex-col gap-2 col-span-1 xl:col-span-3">
-              <label className="font-semibold text-primary-700">الفرع المستلم <span className="text-red-500">*</span></label>
-              <select
-                className="input-modern h-14 text-lg"
-                value={branch}
-                onChange={e => setBranch(e.target.value)}
-                required
-              >
-                <option value="">اختر الفرع المستلم</option>
-                {branches.filter(b => b.governorate === receiver.governorate).map(b => (
+              }}
+              required
+            >
+              {GOVERNORATES.map((g) => (
+                <option key={g} value={g}>{g}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+      </section>
+
+      <section>
+        <SectionHeader icon={Banknote} title={f.transferSection} />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <Field label={f.amount} required>
+            <input className={inputClass} type="number" min="0" step="any" value={amount} onChange={(e) => setAmount(e.target.value)} required />
+          </Field>
+          <Field label={f.benefitAmount} optional>
+            <input className={inputClass} type="number" min="0" step="any" placeholder={f.benefitHint} value={benefitAmount} onChange={(e) => setBenefitAmount(e.target.value)} />
+          </Field>
+          <Field label={f.currency} required>
+            <select className={inputClass} value={currency} onChange={(e) => setCurrency(e.target.value as "SYP" | "USD")} required>
+              {CURRENCIES.map((c) => (
+                <option key={c.code} value={c.code}>{currencyLabel(c.code)}</option>
+              ))}
+            </select>
+          </Field>
+          <div className="sm:col-span-2 lg:col-span-3">
+            <Field label={f.destBranch} required>
+              <select className={inputClass} value={branch} onChange={(e) => setBranch(e.target.value)} required>
+                <option value="">{f.selectBranch}</option>
+                {destBranches.map((b) => (
                   <option key={b.id} value={b.id}>{b.name}</option>
                 ))}
               </select>
-            </div>
-            <div className="flex flex-col gap-2 col-span-1 xl:col-span-3">
-              <label className="font-semibold text-primary-700">رسالة <span className="text-gray-400">(اختياري)</span></label>
-              <input className="input-modern h-14 text-lg" placeholder="رسالة (اختياري)" value={message} onChange={e => setMessage(e.target.value)} />
-            </div>
+            </Field>
           </div>
-          <div className="text-center mt-6">
-            <button type="submit" className="bg-primary-500 text-white px-12 py-3 rounded-xl font-bold hover:bg-primary-600 transition text-xl shadow-lg w-full md:w-auto" disabled={loading}>
-              {loading ? "جاري الإرسال..." : "إرسال التحويل"}
-            </button>
+          <div className="sm:col-span-2 lg:col-span-3">
+            <Field label={f.message} optional>
+              <input className={inputClass} value={message} onChange={(e) => setMessage(e.target.value)} />
+            </Field>
           </div>
-        </>
-      )}
-      <style jsx>{`
-        .input-modern {
-          border: 1.5px solid #e3f2fd;
-          border-radius: 1rem;
-          padding: 0.75rem 1.25rem;
-          width: 100%;
-          background: #f8fbff;
-          font-size: 1.1rem;
-          font-weight: 500;
-          color: #222;
-          transition: box-shadow 0.2s, border 0.2s;
-          outline: none;
-        }
-        .input-modern:focus {
-          border-color: #1976d2;
-          box-shadow: 0 0 0 2px #1976d233;
-          background: #fff;
-        }
-      `}</style>
+        </div>
+      </section>
+
+      <TransferPreviewPanel preview={preview} loading={previewLoading} amount={amount} currency={currency} />
+
+      <div className="flex justify-center pt-2">
+        <button
+          type="submit"
+          disabled={loading || previewLoading}
+          className="inline-flex items-center gap-2 px-10 py-3.5 rounded-xl bg-primary-600 text-white font-bold hover:bg-primary-500 shadow-lg shadow-primary-500/25 transition-all disabled:opacity-50"
+        >
+          <Send className="w-5 h-5" />
+          {loading ? f.sending : f.submit}
+        </button>
+      </div>
     </form>
   );
-} 
+}
+
+function ConfirmRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] p-3">
+      <p className="text-xs text-slate-500 mb-0.5">{label}</p>
+      <p className="font-semibold text-slate-900 dark:text-white">{value}</p>
+    </div>
+  );
+}

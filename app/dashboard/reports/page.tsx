@@ -1,472 +1,538 @@
 "use client";
 
-import React, { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import {
-  Box, Tabs, Tab, Button, TextField, Select, MenuItem, InputLabel, FormControl, Table, TableHead, TableRow, TableCell, TableBody, Stack
-} from "@mui/material";
-import axiosInstance from '@/app/api/axios';
-import { SaveAlt } from '@mui/icons-material';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, PieChart, Pie, Cell } from 'recharts';
-import ModernGroupBox from "@/components/ui/ModernGroupBox";
-import ModernButton from "@/components/ui/ModernButton";
+  BarChart3,
+  Building2,
+  Calendar,
+  Download,
+  FileText,
+  Loader2,
+  PieChart as PieChartIcon,
+  Users,
+} from "lucide-react";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  PieChart,
+  Pie,
+  Cell,
+} from "recharts";
+import ReportsGuidePanel from "@/components/reports/ReportsGuidePanel";
+import { reportsApi, type ChartData, type ReportStats, type ReportTab } from "@/app/api/reports";
+import { useLocale } from "@/components/providers/LocaleProvider";
+import { getStatusBadgeClass, translateActivityStatus } from "@/lib/dashboard-utils";
 
-const statusOptions = ["الكل", "مكتمل", "قيد المعالجة", "ملغي", "مرفوض", "معلق"];
-const typeOptions = ["الكل", "صادر", "وارد"];
-const employeeStatusOptions = ["الكل", "نشط", "غير نشط"];
-const employeeRoleOptions = ["الكل", "موظف", "مدير فرع"];
+const CHART_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
+
+const inputClass =
+  "w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/50 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500/30";
 
 export default function ReportsPage() {
+  const { t } = useLocale();
+  const r = t.dashboard.reports;
   const today = new Date().toISOString().slice(0, 10);
-  const [tab, setTab] = useState(0);
+
+  const [tab, setTab] = useState<ReportTab>("transactions");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
-  const [status, setStatus] = useState("الكل");
-  const [type, setType] = useState("الكل");
+  const [status, setStatus] = useState("all");
+  const [transferType, setTransferType] = useState("all");
+  const [currency, setCurrency] = useState("all");
+  const [employeeStatus, setEmployeeStatus] = useState("all");
+  const [employeeRole, setEmployeeRole] = useState("all");
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [data, setData] = useState<any>(null);
-  const [stats, setStats] = useState<any>(null);
-  const [showTable, setShowTable] = useState(false);
-  const [employeeStatus, setEmployeeStatus] = useState("الكل");
-  const [employeeRole, setEmployeeRole] = useState("الكل");
-  const [employeeSearch, setEmployeeSearch] = useState("");
-  const [chartTab, setChartTab] = useState(0);
+  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [stats, setStats] = useState<ReportStats | null>(null);
+  const [charts, setCharts] = useState<ChartData | null>(null);
+  const [dailySummary, setDailySummary] = useState<ReportStats | null>(null);
+  const [generated, setGenerated] = useState(false);
+  const [chartView, setChartView] = useState<"amounts" | "status">("amounts");
 
-  const fetchData = async () => {
+  const tabs: { key: ReportTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+    { key: "transactions", label: r.tabs.transactions, icon: FileText },
+    { key: "branches", label: r.tabs.branches, icon: Building2 },
+    { key: "employees", label: r.tabs.employees, icon: Users },
+    { key: "daily", label: r.tabs.daily, icon: Calendar },
+    { key: "charts", label: r.tabs.charts, icon: BarChart3 },
+  ];
+
+  const statusOptions = [
+    { value: "all", label: r.filters.all },
+    { value: "processing", label: t.dashboard.status.processing },
+    { value: "completed", label: t.dashboard.status.completed },
+    { value: "pending", label: t.dashboard.status.pending },
+    { value: "cancelled", label: t.dashboard.status.cancelled },
+    { value: "rejected", label: t.dashboard.status.rejected },
+  ];
+
+  const buildParams = useCallback(() => {
+    const params: Record<string, string | number | undefined> = {
+      per_page: 100,
+    };
+    const from = tab === "daily" && !fromDate ? today : fromDate || undefined;
+    const to = tab === "daily" && !toDate ? today : toDate || undefined;
+    if (from) params.from_date = from;
+    if (to) params.to_date = to;
+    if (status !== "all") params.status = status;
+    if (transferType !== "all") params.type = transferType;
+    if (currency !== "all") params.currency = currency;
+    if (employeeStatus !== "all") params.employee_status = employeeStatus;
+    if (employeeRole !== "all") params.employee_role = employeeRole;
+    if (search.trim()) params.search = search.trim();
+    return params;
+  }, [tab, fromDate, toDate, today, status, transferType, currency, employeeStatus, employeeRole, search]);
+
+  const handleGenerate = async () => {
     setLoading(true);
-    setError("");
+    setGenerated(false);
     try {
-      let endpoint = '';
-      switch (tab) {
-        case 0: // تقارير التحويلات
-          endpoint = '/reports/transactions';
-          break;
-        case 1: // تقارير الفروع
-          endpoint = '/branches/stats/';
-          break;
-        case 2: // تقارير الموظفين
-          endpoint = '/reports/employees';
-          break;
-        case 3: // التقارير اليومية
-          endpoint = '/reports/daily';
-          break;
-      }
+      const params = buildParams();
 
-      let params: any = {
-          from_date: fromDate,
-          to_date: toDate,
-          status: status !== 'الكل' ? status : undefined,
-          type: type !== 'الكل' ? type : undefined,
-          employee_status: employeeStatus !== 'الكل' ? employeeStatus : undefined,
-          employee_role: employeeRole !== 'الكل' ? employeeRole : undefined,
-          search: employeeSearch || undefined
-      };
-      if (tab === 3) {
-        if (!fromDate) params.from_date = today;
-        if (!toDate) params.to_date = today;
+      if (tab === "transactions" || tab === "charts") {
+        const res = await reportsApi.transactions(params);
+        setRows(res.data.items);
+        setStats(res.data.stats);
+        setCharts(res.data.charts);
+        setDailySummary(null);
+      } else if (tab === "branches") {
+        const res = await reportsApi.branches(params);
+        setRows(res.data.branch_stats);
+        setStats(res.data.stats);
+        setCharts(null);
+        setDailySummary(null);
+      } else if (tab === "employees") {
+        const res = await reportsApi.employees(params);
+        setRows(res.data.items);
+        setStats(res.data.stats);
+        setCharts(null);
+        setDailySummary(null);
+      } else if (tab === "daily") {
+        const res = await reportsApi.daily(params);
+        setDailySummary(res.data.summary);
+        setRows(res.data.items || []);
+        setStats(res.data.summary);
+        setCharts(null);
       }
-
-      const response = await axiosInstance.get(endpoint, {
-        params
-      });
-
-      if (tab === 1) {
-        setData(response.data.branch_stats || []);
-      } else if (tab === 3) {
-        setData(response.data);
-      } else {
-        setData(response.data.items || []);
-      }
-      if (response.data.stats) {
-        setStats(response.data.stats);
-      }
-      setShowTable(true);
-    } catch (error) {
-      console.error('Error fetching report data:', error);
-      setError("فشل في تحميل بيانات التقرير");
+      setGenerated(true);
+    } catch {
+      toast.error(r.errors.load);
+      setRows([]);
+      setStats(null);
+      setCharts(null);
+      setDailySummary(null);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleGenerate = () => {
-    fetchData();
-  };
-
-  const fetchChartData = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const params: any = {};
-      if (fromDate) params.from_date = fromDate;
-      if (toDate) params.to_date = toDate;
-      const response = await axiosInstance.get('/reports/transactions', { params });
-      setData(response.data.items || []);
-      setShowTable(true);
-    } catch (error) {
-      setError("فشل في تحميل بيانات الرسم البياني");
-      setData([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    setTab(newValue);
-    setShowTable(false);
-    setData(null);
+  const handleTabChange = (next: ReportTab) => {
+    setTab(next);
+    setGenerated(false);
+    setRows([]);
     setStats(null);
-    if (newValue === 3) {
+    setCharts(null);
+    setDailySummary(null);
+    if (next === "daily") {
       setFromDate(today);
       setToDate(today);
     }
-    if (newValue === 4) {
-      fetchChartData();
-    }
   };
 
-  const exportToCSV = () => {
-    if (!Array.isArray(data) && data !== null) return;
-    const replacer = (key: string, value: any) => value === null ? '' : value;
-    const header = Object.keys(data);
-    const csv = [
-      header.join(','),
-      ...Object.values(data).map((row: any) => header.map(fieldName => JSON.stringify(row[fieldName], replacer)).join(','))
-    ].join('\r\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
+  const exportCsv = () => {
+    if (!rows.length) return;
+    const keys = Object.keys(rows[0]);
+    const header = keys.join(",");
+    const body = rows
+      .map((row) => keys.map((k) => JSON.stringify(row[k] ?? "")).join(","))
+      .join("\n");
+    const blob = new Blob([`${header}\n${body}`], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
     a.href = url;
-    a.download = 'report.csv';
+    a.download = `report-${tab}-${today}.csv`;
     a.click();
-    window.URL.revokeObjectURL(url);
+    URL.revokeObjectURL(url);
   };
+
+  const roleLabel = (role: string) =>
+    t.dashboard.employees.roles[role as keyof typeof t.dashboard.employees.roles] ?? role;
+
+  const columns = useMemo(() => {
+    if (tab === "branches") {
+      return [
+        { key: "branch_id", label: r.columns.branchId },
+        { key: "name", label: r.columns.branchName },
+        { key: "governorate", label: r.columns.governorate },
+        { key: "transaction_count", label: r.columns.transactionCount },
+        { key: "outgoing_count", label: r.columns.outgoingCount },
+        { key: "incoming_count", label: r.columns.incomingCount },
+        { key: "total_amount", label: r.columns.totalAmount },
+        { key: "total_tax", label: r.columns.totalTax },
+        { key: "employee_count", label: r.columns.employeeCount },
+      ];
+    }
+    if (tab === "employees") {
+      return [
+        { key: "id", label: r.columns.userId },
+        { key: "username", label: r.columns.username },
+        { key: "role", label: r.columns.role },
+        { key: "branch_name", label: r.columns.branchName },
+        { key: "created_at", label: r.columns.createdAt },
+        { key: "is_active", label: r.columns.active },
+      ];
+    }
+    return [
+      { key: "id", label: r.columns.id },
+      { key: "sender", label: r.columns.sender },
+      { key: "receiver", label: r.columns.receiver },
+      { key: "amount", label: r.columns.amount },
+      { key: "currency", label: r.columns.currency },
+      { key: "date", label: r.columns.date },
+      { key: "status", label: r.columns.status },
+      { key: "sending_branch_name", label: r.columns.sendingBranch },
+      { key: "destination_branch_name", label: r.columns.receivingBranch },
+      { key: "tax_amount", label: r.columns.tax },
+    ];
+  }, [tab, r.columns]);
+
+  const renderCell = (key: string, value: unknown) => {
+    if (key === "status" && typeof value === "string") {
+      return (
+        <span className={`inline-flex px-2 py-0.5 rounded-lg text-xs font-semibold ${getStatusBadgeClass(value)}`}>
+          {translateActivityStatus(value, t)}
+        </span>
+      );
+    }
+    if (key === "role" && typeof value === "string") return roleLabel(value);
+    if (key === "is_active") return value ? r.yes : r.no;
+    if (typeof value === "number") return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    if (typeof value === "string" && value.includes("T")) {
+      try {
+        return new Date(value).toLocaleDateString();
+      } catch {
+        return value;
+      }
+    }
+    return String(value ?? "—");
+  };
+
+  const chartStatusData =
+    charts?.status_counts.map((s) => ({
+      name: translateActivityStatus(s.status, t),
+      value: s.count,
+    })) ?? [];
 
   return (
-    <div className="max-w-7xl mx-auto px-2 sm:px-4 py-6 sm:py-10">
-      <h1 className="text-2xl sm:text-3xl font-bold mb-6 text-primary-800 text-center">التقارير</h1>
-
-      <div className="mb-6">
-        <div className="bg-white rounded-xl shadow flex flex-col items-center justify-center">
-          <Tabs
-            value={tab}
-            onChange={handleTabChange}
-            aria-label="report tabs"
-            className="w-full"
-            TabIndicatorProps={{ style: { background: '#3498db' } }}
-          >
-            <Tab label="تقارير التحويلات" className="!font-bold !text-primary-700" />
-            <Tab label="تقارير الفروع" className="!font-bold !text-primary-700" />
-            <Tab label="تقارير الموظفين" className="!font-bold !text-primary-700" />
-            <Tab label="التقارير اليومية" className="!font-bold !text-primary-700" />
-            <Tab label="الرسوم البيانية" className="!font-bold !text-primary-700" />
-          </Tabs>
-        </div>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl md:text-3xl font-black text-slate-900 dark:text-white">{r.title}</h1>
+        <p className="text-slate-500 dark:text-slate-400 mt-1">{r.subtitle}</p>
       </div>
 
-      <ModernGroupBox color="#fff">
-        <form
-          className="space-y-4"
-          onSubmit={e => { e.preventDefault(); handleGenerate(); }}
-        >
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <TextField
-              label="من تاريخ"
-              type="date"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-              InputLabelProps={{ shrink: true }}
-              fullWidth
-              className="bg-white rounded-lg"
-            />
-            <TextField
-              label="إلى تاريخ"
-              type="date"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-              InputLabelProps={{ shrink: true }}
-              fullWidth
-              className="bg-white rounded-lg"
-            />
-          </div>
+      <div className="flex flex-wrap gap-2">
+        {tabs.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => handleTabChange(key)}
+            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all
+              ${tab === key
+                ? "bg-primary-600 text-white shadow-lg shadow-primary-500/25"
+                : "bg-white dark:bg-slate-900/50 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-white/10 hover:border-primary-500/40"}`}
+          >
+            <Icon className="w-4 h-4" />
+            {label}
+          </button>
+        ))}
+      </div>
 
-          {tab === 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormControl fullWidth>
-                <InputLabel>الحالة</InputLabel>
-                <Select
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value)}
-                  label="الحالة"
-                  className="bg-white rounded-lg"
-                >
-                  {statusOptions.map((option) => (
-                    <MenuItem key={option} value={option}>
-                      {option}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <FormControl fullWidth>
-                <InputLabel>نوع التحويل</InputLabel>
-                <Select
-                  value={type}
-                  onChange={(e) => setType(e.target.value)}
-                  label="نوع التحويل"
-                  className="bg-white rounded-lg"
-                >
-                  {typeOptions.map((option) => (
-                    <MenuItem key={option} value={option}>
-                      {option}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </div>
-          )}
-
-          {tab === 2 && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <FormControl fullWidth>
-                <InputLabel>حالة الموظف</InputLabel>
-                <Select
-                  value={employeeStatus}
-                  onChange={(e) => setEmployeeStatus(e.target.value)}
-                  label="حالة الموظف"
-                  className="bg-white rounded-lg"
-                >
-                  {employeeStatusOptions.map((option) => (
-                    <MenuItem key={option} value={option}>
-                      {option}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <FormControl fullWidth>
-                <InputLabel>دور الموظف</InputLabel>
-                <Select
-                  value={employeeRole}
-                  onChange={(e) => setEmployeeRole(e.target.value)}
-                  label="دور الموظف"
-                  className="bg-white rounded-lg"
-                >
-                  {employeeRoleOptions.map((option) => (
-                    <MenuItem key={option} value={option}>
-                      {option}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <TextField
-                label="بحث"
-                value={employeeSearch}
-                onChange={(e) => setEmployeeSearch(e.target.value)}
-                fullWidth
-                className="bg-white rounded-lg"
-              />
-            </div>
-          )}
-
-          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 w-full justify-end mt-2">
-            <ModernButton
-              color="#3498db"
-              type="submit"
-              disabled={loading}
-              className="w-full sm:w-auto"
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <div className="xl:col-span-2 space-y-6">
+          <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white dark:bg-slate-900/50 p-5 md:p-6 shadow-sm">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleGenerate();
+              }}
+              className="space-y-4"
             >
-              {loading ? "جاري التحميل..." : "توليد التقرير"}
-            </ModernButton>
-          </div>
-        </form>
-      </ModernGroupBox>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field label={r.filters.fromDate}>
+                  <input type="date" className={inputClass} value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+                </Field>
+                <Field label={r.filters.toDate}>
+                  <input type="date" className={inputClass} value={toDate} onChange={(e) => setToDate(e.target.value)} />
+                </Field>
+              </div>
 
-      {error && (
-        <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg flex items-center justify-between">
-          <span>{error}</span>
-        </div>
-      )}
+              {(tab === "transactions" || tab === "charts") && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <Field label={r.filters.status}>
+                    <select className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
+                      {statusOptions.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label={r.filters.transferType}>
+                    <select className={inputClass} value={transferType} onChange={(e) => setTransferType(e.target.value)}>
+                      <option value="all">{r.filters.all}</option>
+                      <option value="outgoing">{r.transferTypes.outgoing}</option>
+                      <option value="incoming">{r.transferTypes.incoming}</option>
+                    </select>
+                  </Field>
+                  <Field label={r.filters.currency}>
+                    <select className={inputClass} value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                      <option value="all">{r.filters.all}</option>
+                      <option value="SYP">SYP</option>
+                      <option value="USD">USD</option>
+                    </select>
+                  </Field>
+                </div>
+              )}
 
-      {tab !== 4 && showTable && Array.isArray(data) && data.length > 0 && (
-        <ModernGroupBox color="#fff">
-          <div className="flex flex-col sm:flex-row justify-between items-center mb-4 gap-2">
-            <div></div>
-            <ModernButton color="#2ecc71" onClick={exportToCSV} className="w-full sm:w-auto">
-              تصدير إلى CSV
-            </ModernButton>
+              {tab === "employees" && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <Field label={r.filters.employeeStatus}>
+                    <select className={inputClass} value={employeeStatus} onChange={(e) => setEmployeeStatus(e.target.value)}>
+                      <option value="all">{r.filters.all}</option>
+                      <option value="active">{r.employeeStatus.active}</option>
+                      <option value="inactive">{r.employeeStatus.inactive}</option>
+                    </select>
+                  </Field>
+                  <Field label={r.filters.employeeRole}>
+                    <select className={inputClass} value={employeeRole} onChange={(e) => setEmployeeRole(e.target.value)}>
+                      <option value="all">{r.filters.all}</option>
+                      <option value="employee">{t.dashboard.employees.roles.employee}</option>
+                      <option value="branch_manager">{t.dashboard.employees.roles.branch_manager}</option>
+                    </select>
+                  </Field>
+                  <Field label={r.filters.search}>
+                    <input className={inputClass} value={search} onChange={(e) => setSearch(e.target.value)} />
+                  </Field>
+                </div>
+              )}
+
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-primary-600 text-white font-semibold hover:bg-primary-500 disabled:opacity-50 transition-colors"
+                >
+                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                  {loading ? r.actions.loading : r.actions.generate}
+                </button>
+              </div>
+            </form>
           </div>
-          <div className="overflow-x-auto rounded-xl border border-primary-100">
-            <Table className="min-w-full bg-white rounded-xl overflow-hidden">
-              <TableHead className="bg-primary-50">
-                <TableRow>
-                  {Object.keys(data[0]).map((key) => (
-                    <TableCell key={key} className="font-bold text-primary-800 text-xs sm:text-sm text-center whitespace-nowrap">
-                      {(() => {
-                        if (tab === 1) {
-                          switch (key) {
-                            case 'branch_id': return 'رقم الفرع';
-                            case 'name': return 'اسم الفرع';
-                            case 'transaction_count': return 'عدد العمليات';
-                            case 'total_amount': return 'إجمالي المبالغ';
-                            case 'total_tax': return 'إجمالي الضرائب';
-                            case 'employee_count': return 'عدد الموظفين';
-                            default: return key;
-                          }
-                        } else if (tab === 2) {
-                          switch (key) {
-                            case 'id': return 'رقم الموظف';
-                            case 'username': return 'اسم المستخدم';
-                            case 'role': return 'الدور';
-                            case 'branch_id': return 'رقم الفرع';
-                            case 'branch_name': return 'اسم الفرع';
-                            case 'created_at': return 'تاريخ الإضافة';
-                            case 'is_active': return 'نشط';
-                            default: return key;
-                          }
-                        } else {
-                          switch (key) {
-                            case 'id': return 'رقم العملية';
-                            case 'sender': return 'المرسل';
-                            case 'receiver': return 'المستلم';
-                            case 'amount': return 'المبلغ';
-                            case 'currency': return 'العملة';
-                            case 'date': return 'التاريخ';
-                            case 'status': return 'الحالة';
-                            case 'sending_branch_name': return 'الفرع المرسل';
-                            case 'destination_branch_name': return 'الفرع المستلم';
-                            case 'employee_name': return 'اسم الموظف';
-                            case 'tax_amount': return 'الضريبة';
-                            case 'tax_rate': return 'نسبة الضريبة';
-                            case 'benefited_amount': return 'المبلغ المستفاد';
-                            case 'is_received': return 'تم الاستلام';
-                            case 'branch_governorate': return 'المحافظة';
-                            default: return key;
-                          }
-                        }
-                      })()}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {data
-                  .filter(row =>
-                    tab !== 2 || (
-                      (employeeStatus === 'الكل' || (employeeStatus === 'نشط' && row.is_active) || (employeeStatus === 'غير نشط' && !row.is_active)) &&
-                      (employeeRole === 'الكل' || row.role === (employeeRole === 'موظف' ? 'employee' : employeeRole === 'مدير فرع' ? 'branch_manager' : row.role)) &&
-                      (employeeSearch.trim() === '' || (row.username && row.username.includes(employeeSearch.trim())) || (row.branch_name && row.branch_name.includes(employeeSearch.trim())))
-                    )
-                  )
-                  .map((row, index) => {
-                    const patchedRow = { ...row };
-                    if (tab === 1) {
-                      if (!patchedRow.branch_id) patchedRow.branch_id = 0;
-                      if (!patchedRow.name) patchedRow.name = 'الفرع الرئيسي';
-                    } else if (tab === 2) {
-                      if (!patchedRow.branch_id) patchedRow.branch_id = 0;
-                      if (!patchedRow.branch_name) patchedRow.branch_name = 'الفرع الرئيسي';
-                    } else if (tab === 0) {
-                      if (!patchedRow.sending_branch_id) patchedRow.sending_branch_id = 0;
-                      if (!patchedRow.sending_branch_name || patchedRow.sending_branch_name === 'غير معروف') patchedRow.sending_branch_name = 'الفرع الرئيسي';
-                      if (!patchedRow.branch_id) patchedRow.branch_id = 0;
-                    } else {
-                      if (!patchedRow.sending_branch_id) patchedRow.sending_branch_id = 0;
-                      if (!patchedRow.sending_branch_name) patchedRow.sending_branch_name = 'الفرع الرئيسي';
-                      if (!patchedRow.destination_branch_id) patchedRow.destination_branch_id = 0;
-                      if (!patchedRow.destination_branch_name) patchedRow.destination_branch_name = 'الفرع الرئيسي';
-                    }
-                    return (
-                      <TableRow key={index} className="hover:bg-primary-50/80 transition-all">
-                        {Object.values(patchedRow).map((value: any, i) => (
-                          <TableCell key={i} className="text-center text-xs sm:text-sm whitespace-nowrap">
-                            {value === true ? 'نعم' : value === false ? 'لا' : value}
-                          </TableCell>
+
+          {generated && stats && tab !== "charts" && (
+            <StatsGrid tab={tab} stats={stats} dailySummary={dailySummary} labels={r.stats} />
+          )}
+
+          {generated && tab === "daily" && dailySummary && (
+            <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white dark:bg-slate-900/50 p-6">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-4">{r.daily.title}</h2>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <MiniStat label={r.stats.totalCount} value={dailySummary.total_count ?? 0} />
+                <MiniStat label={r.stats.totalAmount} value={(dailySummary.total_amount ?? 0).toLocaleString()} />
+                <MiniStat label={r.stats.totalTax} value={(dailySummary.total_tax ?? 0).toLocaleString()} />
+                <MiniStat label={r.stats.completed} value={dailySummary.completed_count ?? 0} />
+                <MiniStat label={r.stats.processing} value={dailySummary.processing_count ?? 0} />
+                <MiniStat label={r.stats.pending} value={dailySummary.pending_count ?? 0} />
+                <MiniStat label={r.stats.cancelled} value={dailySummary.cancelled_count ?? 0} />
+                <MiniStat label={r.stats.rejected} value={dailySummary.rejected_count ?? 0} />
+              </div>
+            </div>
+          )}
+
+          {generated && tab === "charts" && (
+            <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white dark:bg-slate-900/50 p-6 space-y-6">
+              <div className="flex flex-wrap gap-2">
+                <ChartTab active={chartView === "amounts"} onClick={() => setChartView("amounts")} icon={BarChart3} label={r.charts.amounts} />
+                <ChartTab active={chartView === "status"} onClick={() => setChartView("status")} icon={PieChartIcon} label={r.charts.byStatus} />
+              </div>
+              <div className="min-h-[320px]">
+                {chartView === "amounts" && charts?.daily_amounts?.length ? (
+                  <ResponsiveContainer width="100%" height={320}>
+                    <BarChart data={charts.daily_amounts}>
+                      <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} />
+                      <Tooltip />
+                      <Legend />
+                      <Bar dataKey="amount" fill="#6366f1" name={r.stats.volume} radius={[6, 6, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : chartView === "status" && chartStatusData.length ? (
+                  <ResponsiveContainer width="100%" height={320}>
+                    <PieChart>
+                      <Pie data={chartStatusData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={110} label>
+                        {chartStatusData.map((_, i) => (
+                          <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                         ))}
-                      </TableRow>
-                    );
-                  })}
-              </TableBody>
-            </Table>
-          </div>
-        </ModernGroupBox>
-      )}
+                      </Pie>
+                      <Tooltip />
+                      <Legend />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex items-center justify-center h-64 text-slate-500">{r.charts.noData}</div>
+                )}
+              </div>
+            </div>
+          )}
 
-      {tab === 4 && (
-        <ModernGroupBox color="#fff">
-          <h2 className="text-xl font-bold mb-4 text-center text-primary-800">الرسوم البيانية</h2>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-6">
-            <Tabs value={chartTab} onChange={(_, v) => setChartTab(v)} aria-label="chart tabs">
-              <Tab label="مبالغ التحويلات" className="!font-bold !text-primary-700" />
-              <Tab label="عدد العمليات حسب الحالة" className="!font-bold !text-primary-700" />
-            </Tabs>
-          </div>
-          <div className="w-full min-h-[300px] flex items-center justify-center">
-            {chartTab === 0 && Array.isArray(data) && data.length > 0 && (
-              <ResponsiveContainer width="100%" height={350}>
-                <BarChart data={data}>
-                  <XAxis dataKey="date" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="amount" fill="#8884d8" name="المبلغ" />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-            {chartTab === 1 && Array.isArray(data) && data.length > 0 && (
-              <ResponsiveContainer width="100%" height={350}>
-                <PieChart>
-                  <Pie
-                    data={Object.entries(data.reduce((acc, cur) => {
-                      acc[cur.status] = (acc[cur.status] || 0) + 1;
-                      return acc;
-                    }, {})).map(([status, count]) => ({ name: status, value: count }))}
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={120}
-                    fill="#82ca9d"
-                    label
+          {generated && tab !== "charts" && tab !== "daily" && (
+            <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white dark:bg-slate-900/50 overflow-hidden">
+              <div className="flex justify-between items-center p-4 border-b border-slate-200 dark:border-white/10">
+                <span className="text-sm text-slate-500">{rows.length} {r.stats.totalCount.toLowerCase()}</span>
+                {rows.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={exportCsv}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500"
                   >
-                    {Object.entries(data.reduce((acc, cur) => {
-                      acc[cur.status] = (acc[cur.status] || 0) + 1;
-                      return acc;
-                    }, {})).map(([status], idx) => (
-                      <Cell key={status} fill={["#8884d8", "#82ca9d", "#ffc658", "#ff8042", "#a4de6c"][idx % 5]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            )}
-            {(!Array.isArray(data) || data.length === 0) && (
-              <div className="text-center text-gray-500 py-4">لا توجد بيانات لعرض الرسم البياني</div>
-            )}
-          </div>
-        </ModernGroupBox>
-      )}
+                    <Download className="w-4 h-4" />
+                    {r.actions.export}
+                  </button>
+                )}
+              </div>
+              {rows.length === 0 ? (
+                <div className="p-12 text-center text-slate-500">{r.empty}</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 dark:bg-white/[0.03] border-b border-slate-200 dark:border-white/10">
+                        {columns.map((col) => (
+                          <th key={col.key} className="px-4 py-3 text-start font-semibold text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                            {col.label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row, i) => (
+                        <tr key={i} className="border-b border-slate-100 dark:border-white/5 hover:bg-slate-50/80 dark:hover:bg-white/[0.02]">
+                          {columns.map((col) => (
+                            <td key={col.key} className="px-4 py-3 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                              {renderCell(col.key, row[col.key])}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
-      {tab === 3 && showTable && data && data.summary && (
-        <ModernGroupBox color="#fff">
-          <h2 className="text-xl font-bold mb-4 text-center text-primary-800">ملخص العمليات اليومية</h2>
-          <ul className="space-y-3 text-lg text-primary-900">
-            <li><b>إجمالي عدد العمليات:</b> {data.summary.total_count}</li>
-            <li><b>إجمالي المبالغ:</b> {data.summary.total_amount.toLocaleString()} ل.س</li>
-            <li><b>إجمالي الضرائب:</b> {data.summary.total_tax.toLocaleString()} ل.س</li>
-            <li><b>عدد العمليات المكتملة:</b> {data.summary.completed_count}</li>
-            <li><b>عدد العمليات قيد التنفيذ:</b> {data.summary.processing_count}</li>
-            <li><b>عدد العمليات الملغاة:</b> {data.summary.cancelled_count}</li>
-            <li><b>عدد العمليات المرفوضة:</b> {data.summary.rejected_count}</li>
-            <li><b>عدد العمليات قيد الانتظار:</b> {data.summary.pending_count}</li>
-          </ul>
-        </ModernGroupBox>
-      )}
-
-      {tab === 3 && showTable && (!data || !data.summary || data.summary.total_count === 0) && (
-        <ModernGroupBox color="#fff">
-          <div className="text-center text-gray-500 text-lg">لا يوجد تقارير لليوم</div>
-        </ModernGroupBox>
-      )}
+        <ReportsGuidePanel />
+      </div>
     </div>
   );
-} 
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] p-3">
+      <p className="text-[10px] uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="text-lg font-bold text-slate-900 dark:text-white mt-0.5">{value}</p>
+    </div>
+  );
+}
+
+function ChartTab({
+  active,
+  onClick,
+  icon: Icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-colors
+        ${active ? "bg-primary-600 text-white" : "bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-300"}`}
+    >
+      <Icon className="w-4 h-4" />
+      {label}
+    </button>
+  );
+}
+
+function StatsGrid({
+  tab,
+  stats,
+  dailySummary,
+  labels,
+}: {
+  tab: ReportTab;
+  stats: ReportStats;
+  dailySummary: ReportStats | null;
+  labels: {
+    totalCount: string;
+    totalAmount: string;
+    totalTax: string;
+    completed: string;
+    processing: string;
+    branches: string;
+    employees: string;
+    activeEmployees: string;
+    inactiveEmployees: string;
+  };
+}) {
+  const s = dailySummary ?? stats;
+  const items =
+    tab === "branches"
+      ? [
+          { label: labels.branches, value: stats.branch_count ?? 0 },
+          { label: labels.totalCount, value: stats.total_count ?? stats.transaction_count ?? 0 },
+          { label: labels.totalAmount, value: (stats.total_amount ?? 0).toLocaleString() },
+          { label: labels.totalTax, value: (stats.total_tax ?? 0).toLocaleString() },
+        ]
+      : tab === "employees"
+        ? [
+            { label: labels.employees, value: stats.total_count ?? 0 },
+            { label: labels.activeEmployees, value: stats.active_count ?? 0 },
+            { label: labels.inactiveEmployees, value: stats.inactive_count ?? 0 },
+          ]
+        : [
+            { label: labels.totalCount, value: s.total_count ?? 0 },
+            { label: labels.totalAmount, value: (s.total_amount ?? 0).toLocaleString() },
+            { label: labels.completed, value: s.completed_count ?? 0 },
+            { label: labels.processing, value: s.processing_count ?? 0 },
+          ];
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {items.map((item) => (
+        <MiniStat key={item.label} label={item.label} value={item.value} />
+      ))}
+    </div>
+  );
+}

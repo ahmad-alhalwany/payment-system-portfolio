@@ -15,28 +15,23 @@ def default_serializer(obj):
 class Cache:
     def __init__(self, host=None, port=None, db=0):
         try:
-            # Use environment variables with fallback to default values
-            redis_host = host or os.getenv('REDIS_HOST', 'localhost')
-            redis_port = port or int(os.getenv('REDIS_PORT', 6379))
-            redis_password = os.getenv('REDIS_PASSWORD', None)
-            
-            self.redis_client = redis.Redis(
-                host=redis_host,
-                port=redis_port,
-                password=redis_password,
-                db=db,
-                decode_responses=True
-            )
-            # redis_host = host or os.getenv('REDIS_HOST', 'localhost')
-            # redis_port = port or int(os.getenv('REDIS_PORT', 6379))
-            
-            # self.redis_client = redis.Redis(
-            #     host=redis_host,
-            #     port=redis_port,
-            #     db=db,
-            #     decode_responses=True
-            # )
-            logger.info(f"Successfully connected to Redis at {redis_host}:{redis_port}")
+            redis_url = os.getenv("REDIS_URL")
+            if redis_url:
+                self.redis_client = redis.from_url(redis_url, decode_responses=True)
+                logger.info("Successfully connected to Redis at %s", redis_url)
+            else:
+                redis_host = host or os.getenv("REDIS_HOST", "localhost")
+                redis_port = port or int(os.getenv("REDIS_PORT", 6379))
+                redis_password = os.getenv("REDIS_PASSWORD", None)
+
+                self.redis_client = redis.Redis(
+                    host=redis_host,
+                    port=redis_port,
+                    password=redis_password,
+                    db=db,
+                    decode_responses=True,
+                )
+                logger.info("Successfully connected to Redis at %s:%s", redis_host, redis_port)
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {str(e)}")
             self.redis_client = None

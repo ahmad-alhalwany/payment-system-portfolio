@@ -1,54 +1,60 @@
-import React, { useState, useEffect } from "react";
+"use client";
+
+import { useEffect, useState } from "react";
 import BranchModal from "../branch/BranchModal";
-import ModernButton from "../ui/ModernButton";
+import { useLocale } from "@/components/providers/LocaleProvider";
+import type { Transaction } from "@/app/api/transactions";
 
 interface TransactionStatusModalProps {
   open: boolean;
   onClose: () => void;
-  transaction: any;
+  transaction?: Transaction | null;
   onSubmit: (newStatus: string) => void;
-  statusOptions?: { value: string; label: string }[];
+  loading?: boolean;
 }
 
-export default function TransactionStatusModal({ open, onClose, transaction, onSubmit, statusOptions }: TransactionStatusModalProps) {
-  const defaultStatus = statusOptions && statusOptions.length > 0 ? statusOptions[0].value : "processing";
-  const getInitialStatus = () => {
-    if (!transaction) return defaultStatus;
-    // ابحث عن القيمة الإنجليزية بناءً على value أو label
-    return statusOptions?.find(opt => opt.value === transaction.status || opt.label === transaction.status)?.value || defaultStatus;
-  };
-  const [status, setStatus] = useState(getInitialStatus());
+const STATUS_VALUES = ["processing", "completed", "cancelled", "rejected", "pending"] as const;
+
+export default function TransactionStatusModal({ open, onClose, transaction, onSubmit, loading }: TransactionStatusModalProps) {
+  const { t } = useLocale();
+  const m = t.dashboard.transactions.modals;
+  const [status, setStatus] = useState("processing");
 
   useEffect(() => {
-    setStatus(getInitialStatus());
-  }, [transaction, open]);
+    if (open && transaction) {
+      setStatus(transaction.status || "processing");
+    }
+  }, [open, transaction?.status, transaction?.id]);
 
-  const handleSave = () => {
-    onSubmit(status);
-  };
+  if (!open || !transaction) return null;
 
-  if (!transaction) return null;
   return (
-    <BranchModal open={open} onClose={onClose} title={`تحديث حالة التحويل - ${transaction.id || ""}`}>
+    <BranchModal open={open} onClose={onClose} title={`${m.statusTitle} — ${transaction.short_id || transaction.id.slice(0, 8)}`}>
       <div className="space-y-4">
         <div>
-          <label className="block mb-1 font-medium">الحالة الحالية</label>
+          <label className="block mb-1 text-sm font-medium text-slate-700 dark:text-slate-300">{m.currentStatus}</label>
           <select
             value={status}
-            onChange={e => setStatus(e.target.value)}
-            className="input-field w-full"
+            onChange={(e) => setStatus(e.target.value)}
+            className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/50"
+            disabled={loading}
           >
-            {statusOptions && statusOptions.length > 0
-              ? statusOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)
-              : [<option key={status} value={status}>{status}</option>]
-            }
+            {STATUS_VALUES.map((value) => (
+              <option key={value} value={value}>
+                {t.dashboard.status[value]}
+              </option>
+            ))}
           </select>
         </div>
-        <div className="flex justify-end gap-2 mt-4">
-          <ModernButton color="#e74c3c" onClick={onClose}>إلغاء</ModernButton>
-          <ModernButton color="#2ecc71" onClick={handleSave}>حفظ</ModernButton>
+        <div className="flex justify-end gap-3">
+          <button type="button" onClick={onClose} disabled={loading} className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 dark:hover:bg-white/5">
+            {m.cancel}
+          </button>
+          <button type="button" onClick={() => onSubmit(status)} disabled={loading} className="px-4 py-2 rounded-xl bg-emerald-600 text-white font-semibold hover:bg-emerald-500 disabled:opacity-50">
+            {loading ? "..." : m.save}
+          </button>
         </div>
       </div>
     </BranchModal>
   );
-} 
+}

@@ -5,6 +5,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL;
 // Types
 export interface Transaction {
   id: string;
+  short_id?: string;
   sender: string;
   sender_mobile: string;
   sender_governorate: string;
@@ -59,6 +60,9 @@ export const transactionsApi = {
     status?: string;
     start_date?: string;
     end_date?: string;
+    id?: string;
+    sender?: string;
+    receiver?: string;
   }): Promise<TransactionResponse> => {
     const response = await axiosInstance.get(`${API_URL}/transactions/`, { params });
     return response.data;
@@ -88,7 +92,21 @@ export const transactionsApi = {
     transaction_id: string;
     status: string;
   }) => {
-    const response = await axiosInstance.post(`${API_URL}/update-transaction-status/`, data);
+    const response = await axiosInstance.patch(
+      `/transactions/${data.transaction_id}/status/`,
+      { status: data.status }
+    );
     return response.data;
-  }
+  },
+
+  previewTransfer: async (data: {
+    amount: number;
+    benefited_amount?: number;
+    currency: "SYP" | "USD";
+    sending_branch_id?: number;
+    destination_branch_id?: number;
+  }) => {
+    const response = await axiosInstance.post("/money-transfer/preview/", data);
+    return response.data;
+  },
 }; 

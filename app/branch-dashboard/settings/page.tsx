@@ -1,158 +1,269 @@
 "use client";
-import React, { useState, useEffect } from "react";
-import { Box, Stack, Typography, Paper, TextField, Button, Switch, FormControlLabel, Divider, Snackbar, Alert } from "@mui/material";
-import { useAuth } from "@/app/hooks/useAuth";
-import UserSettingsForm from "@/components/settings/UserSettingsForm";
+
+import { useCallback, useEffect, useState } from "react";
+import toast from "react-hot-toast";
+import { Building2, Loader2, Lock, Save, Settings2, User } from "lucide-react";
+import BranchSettingsGuidePanel from "@/components/branch-manager/SettingsGuidePanel";
 import axiosInstance from "@/app/api/axios";
+import { settingsApi } from "@/app/api/settings";
+import { useAuth } from "@/app/hooks/useAuth";
+import { useLocale } from "@/components/providers/LocaleProvider";
+
+type SettingsTab = "branch" | "account";
+
+const inputClass =
+  "w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/50 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500/30";
+
+const readOnlyClass =
+  "w-full px-3 py-2.5 rounded-xl border border-slate-200/60 dark:border-white/5 bg-slate-50 dark:bg-slate-800/50 text-sm text-slate-500 dark:text-slate-400 cursor-not-allowed";
+
+interface BranchInfo {
+  id: number;
+  name: string;
+  location: string;
+  governorate: string;
+  phone_number: string;
+}
 
 export default function BranchSettingsPage() {
+  const { t } = useLocale();
+  const s = t.dashboard.manager.settings;
   const { user } = useAuth();
-  const [branchInfo, setBranchInfo] = useState({
-    id: "",
-    name: "",
-    location: "",
-    governorate: "",
-    phone_number: ""
-  });
-  const [darkMode, setDarkMode] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState(false);
-  const [loading, setLoading] = useState(false);
 
-  // جلب بيانات الفرع عند تحميل الصفحة
-  useEffect(() => {
-    const fetchBranch = async () => {
-      try {
-        setLoading(true);
-        // جلب بيانات الفرع حسب branchId من localStorage أو user
-        const branchId = user?.branch_id || localStorage.getItem('branchId');
-        if (!branchId) return;
-        const response = await axiosInstance.get(`/branches/${branchId}`);
-        setBranchInfo({
-          id: response.data.id,
-          name: response.data.name,
-          location: response.data.location,
-          governorate: response.data.governorate,
-          phone_number: response.data.phone_number || ""
-        });
-      } catch (e) {
-        // معالجة الخطأ
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchBranch();
-  }, [user]);
+  const [tab, setTab] = useState<SettingsTab>("branch");
+  const [branchInfo, setBranchInfo] = useState<BranchInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  const handleSave = async () => {
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const loadBranch = useCallback(async () => {
+    const branchId = user?.branch_id;
+    if (!branchId) return;
+    setLoading(true);
     try {
-      setLoading(true);
-      const branchId = branchInfo.id;
-      await axiosInstance.put(`/branches/${branchId}`, {
-        phone_number: branchInfo.phone_number,
-        location: branchInfo.location
-      });
-      setSaveSuccess(true);
-      // إعادة جلب البيانات بعد الحفظ
-      const response = await axiosInstance.get(`/branches/${branchId}`);
+      const { data } = await axiosInstance.get(`/branches/${branchId}`);
       setBranchInfo({
-        id: response.data.id,
-        name: response.data.name,
-        location: response.data.location,
-        governorate: response.data.governorate,
-        phone_number: response.data.phone_number || ""
+        id: data.id,
+        name: data.name,
+        location: data.location ?? "",
+        governorate: data.governorate ?? "",
+        phone_number: data.phone_number ?? "",
       });
-    } catch (e) {
-      // معالجة الخطأ
+    } catch {
+      toast.error(s.errors.load);
     } finally {
       setLoading(false);
     }
+  }, [user?.branch_id, s.errors.load]);
+
+  useEffect(() => {
+    loadBranch();
+  }, [loadBranch]);
+
+  const handleSaveBranch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!branchInfo) return;
+    setSaving(true);
+    try {
+      await axiosInstance.put(`/branches/${branchInfo.id}`, {
+        location: branchInfo.location,
+        phone_number: branchInfo.phone_number,
+      });
+      toast.success(s.success.branch);
+      await loadBranch();
+    } catch {
+      toast.error(s.errors.save);
+    } finally {
+      setSaving(false);
+    }
   };
 
+  const handlePasswordChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword !== confirmPassword) {
+      toast.error(s.errors.mismatch);
+      return;
+    }
+    setSaving(true);
+    try {
+      await settingsApi.changePassword(oldPassword, newPassword);
+      toast.success(s.success.password);
+      setOldPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : s.errors.password);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const tabs: { key: SettingsTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+    { key: "branch", label: s.tabs.branch, icon: Building2 },
+    { key: "account", label: s.tabs.account, icon: User },
+  ];
+
   return (
-    <Box sx={{ minHeight: '100vh', background: 'linear-gradient(135deg, #e3f0ff 0%, #fceabb 100%)', py: { xs: 2, md: 4 } }}>
-      <Box sx={{ maxWidth: 600, mx: 'auto', borderRadius: 6, boxShadow: '0 6px 32px #0002', background: 'rgba(255,255,255,0.97)', p: { xs: 2, md: 4 } }}>
-        <Stack spacing={3}>
-          <Paper sx={{ p: { xs: 2, md: 3 }, borderRadius: 4, boxShadow: '0 2px 12px #1976d210', background: 'linear-gradient(120deg, #e3f2fd 60%, #fff 100%)' }}>
-            <Typography variant="h6" gutterBottom sx={{ fontWeight: 800, color: '#1976d2' }}>
-              معلومات الفرع
-            </Typography>
-            <Stack spacing={2}>
-              <TextField
-                label="اسم الفرع"
-                value={branchInfo.name}
-                fullWidth
-                disabled
-                sx={{ borderRadius: 2, background: '#f5faff' }}
-              />
-              <TextField
-                label="الموقع"
-                value={branchInfo.location}
-                fullWidth
-                disabled
-                sx={{ borderRadius: 2, background: '#f5faff' }}
-              />
-              <TextField
-                label="المحافظة"
-                value={branchInfo.governorate}
-                fullWidth
-                disabled
-                sx={{ borderRadius: 2, background: '#f5faff' }}
-              />
-              <TextField
-                label="رقم هاتف الفرع"
-                value={branchInfo.phone_number}
-                onChange={e => setBranchInfo({ ...branchInfo, phone_number: e.target.value })}
-                fullWidth
-                sx={{ borderRadius: 2, background: '#f5faff' }}
-              />
-            </Stack>
-          </Paper>
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+          <Settings2 className="w-7 h-7 text-indigo-600" />
+          {s.title}
+        </h2>
+        <p className="text-slate-600 dark:text-slate-400 mt-1">{s.subtitle}</p>
+      </div>
 
-          <Paper sx={{ p: { xs: 2, md: 3 }, borderRadius: 4, boxShadow: '0 2px 12px #43a04722', background: 'linear-gradient(120deg, #e0f7fa 60%, #fff 100%)' }}>
-            <Typography variant="h6" gutterBottom sx={{ fontWeight: 800, color: '#388e3c' }}>
-              إعدادات المستخدم
-            </Typography>
-            <UserSettingsForm username={user?.username || ''} />
-          </Paper>
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_280px] gap-6">
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2 p-1 rounded-xl bg-slate-100 dark:bg-slate-800/50">
+            {tabs.map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTab(key)}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all
+                  ${tab === key
+                    ? "bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-sm"
+                    : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                  }`}
+              >
+                <Icon className="w-4 h-4" />
+                {label}
+              </button>
+            ))}
+          </div>
 
-          <Paper sx={{ p: { xs: 2, md: 3 }, borderRadius: 4, boxShadow: '0 2px 12px #fbc02d22', background: 'linear-gradient(120deg, #fffde7 60%, #fff 100%)' }}>
-            <Typography variant="h6" gutterBottom sx={{ fontWeight: 800, color: '#fbc02d' }}>
-              المظهر
-            </Typography>
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={darkMode}
-                  onChange={(e) => setDarkMode(e.target.checked)}
-                  sx={{ '& .MuiSwitch-thumb': { background: darkMode ? '#1976d2' : undefined } }}
-                />
-              }
-              label="الوضع الليلي"
-              sx={{ fontWeight: 700 }}
-            />
-          </Paper>
+          <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white dark:bg-slate-900/50 p-5 md:p-6">
+            {loading ? (
+              <div className="flex items-center justify-center py-16 text-slate-500">
+                <Loader2 className="w-6 h-6 animate-spin me-2" />
+              </div>
+            ) : tab === "branch" && branchInfo ? (
+              <form onSubmit={handleSaveBranch} className="space-y-5">
+                <h3 className="font-semibold text-lg text-slate-900 dark:text-white">{s.branch.title}</h3>
 
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={handleSave}
-            sx={{ mt: 2, borderRadius: 99, fontWeight: 700, fontSize: 17, px: 4, py: 1.5, boxShadow: '0 2px 8px #1976d220' }}
-          >
-            حفظ التغييرات
-          </Button>
-        </Stack>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                      {s.branch.name}
+                    </label>
+                    <input type="text" value={branchInfo.name} readOnly className={readOnlyClass} />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                      {s.branch.governorate}
+                    </label>
+                    <input type="text" value={branchInfo.governorate} readOnly className={readOnlyClass} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                      {s.branch.location}
+                    </label>
+                    <input
+                      type="text"
+                      value={branchInfo.location}
+                      onChange={(e) => setBranchInfo({ ...branchInfo, location: e.target.value })}
+                      className={inputClass}
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                      {s.branch.phone}
+                    </label>
+                    <input
+                      type="tel"
+                      value={branchInfo.phone_number}
+                      onChange={(e) => setBranchInfo({ ...branchInfo, phone_number: e.target.value })}
+                      className={inputClass}
+                    />
+                  </div>
+                </div>
 
-        <Snackbar
-          open={saveSuccess}
-          autoHideDuration={3000}
-          onClose={() => setSaveSuccess(false)}
-          anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
-        >
-          <Alert severity="success" onClose={() => setSaveSuccess(false)} sx={{ fontWeight: 700, fontSize: 16, borderRadius: 2, boxShadow: '0 2px 8px #43a04722' }}>
-            تم حفظ التغييرات بنجاح
-          </Alert>
-        </Snackbar>
-      </Box>
-    </Box>
+                <p className="text-xs text-slate-500 dark:text-slate-400">{s.branch.readOnlyHint}</p>
+
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold disabled:opacity-60"
+                >
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {saving ? s.branch.saving : s.branch.save}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handlePasswordChange} className="space-y-5">
+                <h3 className="font-semibold text-lg text-slate-900 dark:text-white flex items-center gap-2">
+                  <Lock className="w-5 h-5 text-indigo-600" />
+                  {s.account.title}
+                </h3>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                    {s.account.username}
+                  </label>
+                  <input type="text" value={user?.username ?? ""} readOnly className={readOnlyClass} />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                      {s.account.oldPassword}
+                    </label>
+                    <input
+                      type="password"
+                      value={oldPassword}
+                      onChange={(e) => setOldPassword(e.target.value)}
+                      required
+                      className={inputClass}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                      {s.account.newPassword}
+                    </label>
+                    <input
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      required
+                      minLength={6}
+                      className={inputClass}
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                      {s.account.confirmPassword}
+                    </label>
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      required
+                      minLength={6}
+                      className={inputClass}
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold disabled:opacity-60"
+                >
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                  {saving ? s.account.changing : s.account.changePassword}
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+
+        <BranchSettingsGuidePanel />
+      </div>
+    </div>
   );
-} 
+}

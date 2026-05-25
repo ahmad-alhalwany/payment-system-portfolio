@@ -1,162 +1,192 @@
-'use client'
+"use client";
 
-import { useRouter } from 'next/navigation'
-import { useState } from 'react'
-import Link from 'next/link'
-import { useAuth } from '@/app/hooks/useAuth'
-import { FiLogOut, FiHome, FiRepeat, FiUsers, FiGitBranch, FiBarChart2, FiSearch } from 'react-icons/fi'
-
-function getCookie(name: string): string | null {
-  if (typeof document === 'undefined') return null;
-  const value = `; ${document.cookie}`;
-  const parts = value.split(`; ${name}=`);
-  if (parts.length === 2) return parts.pop()?.split(';').shift() || null;
-  return null;
-}
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { useState } from "react";
+import {
+  FiHome,
+  FiRepeat,
+  FiUsers,
+  FiGitBranch,
+  FiBarChart2,
+  FiSearch,
+  FiLogOut,
+  FiMenu,
+  FiX,
+  FiGrid,
+} from "react-icons/fi";
+import ThemeToggle from "@/components/ui/ThemeToggle";
+import LanguageToggle from "@/components/ui/LanguageToggle";
+import { useAuth } from "@/app/hooks/useAuth";
+import { useLocale } from "@/components/providers/LocaleProvider";
+import { getDashboardForRole } from "@/lib/demo-auth";
 
 function clearSession() {
-  localStorage.removeItem('token');
-  localStorage.removeItem('user');
-  localStorage.removeItem('userRole');
-  localStorage.removeItem('username');
-  localStorage.removeItem('branchId');
-  localStorage.removeItem('userId');
-  document.cookie = 'token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-  document.cookie = 'userRole=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+  localStorage.removeItem("userRole");
+  localStorage.removeItem("username");
+  localStorage.removeItem("branchId");
+  localStorage.removeItem("userId");
+  document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+  document.cookie = "userRole=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
 }
 
 export default function Header() {
-  const router = useRouter()
-  const [isMenuOpen, setIsMenuOpen] = useState(false)
-  const [search, setSearch] = useState("")
-  const { user, logout } = useAuth()
+  const router = useRouter();
+  const pathname = usePathname();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const { user } = useAuth();
+  const { t } = useLocale();
 
   const handleLogout = () => {
     clearSession();
-    router.push('/login');
-  }
+    router.push("/login");
+  };
 
   const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (search.trim()) {
-      router.push(`/search?query=${encodeURIComponent(search)}`)
-    }
+    e.preventDefault();
+    if (search.trim()) router.push(`/search?query=${encodeURIComponent(search.trim())}`);
+  };
+
+  type NavItem = { href: string; label: string; icon: React.ReactNode };
+  const navItems: NavItem[] = [
+    { href: "/", label: t.nav.home, icon: <FiHome className="w-4 h-4" /> },
+    { href: "/money-transfer", label: t.nav.transfers, icon: <FiRepeat className="w-4 h-4" /> },
+  ];
+  if (user?.role === "director") {
+    navItems.push({ href: "/dashboard/employees", label: t.nav.employees, icon: <FiUsers className="w-4 h-4" /> });
+    navItems.push({ href: "/dashboard/branches", label: t.nav.branches, icon: <FiGitBranch className="w-4 h-4" /> });
+    navItems.push({ href: "/dashboard/reports", label: t.nav.reports, icon: <FiBarChart2 className="w-4 h-4" /> });
+  }
+  if (user?.role === "branch_manager") {
+    navItems.push({ href: "/branch-dashboard/employees", label: t.nav.employees, icon: <FiUsers className="w-4 h-4" /> });
+    navItems.push({ href: "/branch-dashboard/reports", label: t.nav.reports, icon: <FiBarChart2 className="w-4 h-4" /> });
+  }
+  if (user?.role) {
+    navItems.push({
+      href: getDashboardForRole(user.role),
+      label: t.nav.dashboard,
+      icon: <FiGrid className="w-4 h-4" />,
+    });
   }
 
-  // روابط التنقل حسب الدور
-  const navLinks = [
-    { href: '/', label: 'الرئيسية', icon: <FiHome /> },
-    { href: '/money-transfer', label: 'التحويلات', icon: <FiRepeat /> },
-  ];
-  if (user?.role === 'director' || user?.role === 'branch_manager') {
-    navLinks.push({ href: '/dashboard/employees', label: 'الموظفون', icon: <FiUsers /> });
-  }
-  if (user?.role === 'director') {
-    navLinks.push({ href: '/dashboard/branches', label: 'الفروع', icon: <FiGitBranch /> });
-    navLinks.push({ href: '/dashboard/reports', label: 'التقارير', icon: <FiBarChart2 /> });
-  }
+  const roleLabel =
+    t.dashboard.employees.roles[user?.role as keyof typeof t.dashboard.employees.roles] ?? user?.role;
+
+  const isActive = (href: string) =>
+    href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
 
   return (
-    <header className="bg-white/90 shadow-md sticky top-0 z-50 backdrop-blur-lg">
-      <nav className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <div className="flex h-20 justify-between items-center">
-          {/* القائمة الجانبية للجوال */}
-          <div className="flex md:hidden">
-            <button
-              onClick={() => setIsMenuOpen(!isMenuOpen)}
-              className="inline-flex items-center justify-center p-2 rounded-full text-primary-700 hover:bg-primary-100 focus:outline-none border-2 border-primary-100 shadow"
-              aria-label="فتح القائمة"
-            >
-              <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-              </svg>
-            </button>
-          </div>
-          {/* شعار وعنوان */}
-          <div className="flex items-center gap-4 select-none">
-            <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-primary-400 to-primary-700 flex items-center justify-center shadow-lg border-4 border-white hover:scale-105 transition-transform">
-              <img src="/payment-system.jpg" alt="شعار النظام" className="w-10 h-10 rounded-full" />
+    <header className="sticky top-0 z-50 border-b border-slate-200/80 dark:border-white/10 bg-white/80 dark:bg-slate-950/80 backdrop-blur-xl">
+      <nav className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex h-16 items-center gap-4">
+          <button
+            type="button"
+            className="md:hidden p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/5"
+            onClick={() => setMobileOpen((v) => !v)}
+            aria-label={t.nav.menu}
+          >
+            {mobileOpen ? <FiX size={22} /> : <FiMenu size={22} />}
+          </button>
+
+          <Link href="/" className="flex items-center gap-3 shrink-0">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary-500 to-violet-600 p-0.5 shadow-lg shadow-primary-500/20">
+              <img src="/payment-system.jpg" alt="" className="w-full h-full rounded-[10px] object-cover" />
             </div>
-            <h1 className="text-2xl font-extrabold text-primary-800 tracking-tight drop-shadow-sm font-[Tajawal,Arial,sans-serif] bg-gradient-to-l from-primary-700 to-primary-500 bg-clip-text text-transparent">مكتب الجاسم للحوالات</h1>
-          </div>
-          {/* روابط التنقل */}
-          <div className="hidden md:flex gap-6 items-center">
-            {navLinks.map(link => (
+            <span className="hidden sm:block font-bold text-slate-900 dark:text-white text-sm md:text-base max-w-[140px] md:max-w-none truncate">
+              {t.site.name}
+            </span>
+          </Link>
+
+          <div className="hidden lg:flex items-center gap-1 flex-1 justify-center">
+            {navItems.map((item) => (
               <Link
-                key={link.href}
-                href={link.href}
-                className="flex items-center gap-1 px-2 py-1 rounded-lg font-semibold text-primary-700 hover:bg-primary-100 hover:text-primary-900 transition-all relative group"
+                key={item.href}
+                href={item.href}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors
+                  ${isActive(item.href)
+                    ? "bg-primary-500/15 text-primary-600 dark:text-primary-400"
+                    : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5"}`}
               >
-                <span className="text-lg">{link.icon}</span>
-                <span>{link.label}</span>
-                {/* خط سفلي متدرج عند التفعيل */}
-                {/* يمكن تفعيل active link حسب المسار لاحقًا */}
-                <span className="absolute left-0 right-0 -bottom-1 h-0.5 bg-gradient-to-l from-primary-600 to-primary-400 scale-x-0 group-hover:scale-x-100 transition-transform origin-right" />
+                {item.icon}
+                {item.label}
               </Link>
             ))}
           </div>
-          {/* شريط البحث */}
-          <form onSubmit={handleSearch} className="hidden md:flex items-center gap-2 bg-primary-50 rounded-full px-4 py-2 mx-4 w-80 shadow-sm border border-primary-100 focus-within:ring-2 focus-within:ring-primary-200">
-            <input
-              type="text"
-              className="bg-transparent outline-none flex-1 px-2 py-1 text-primary-800 placeholder:text-primary-400"
-              placeholder="بحث متقدم... (اسم، رقم، ...الخ)"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-            <button type="submit" className="text-primary-600 hover:text-primary-800 p-1.5 rounded-full transition hover:bg-primary-100">
-              <FiSearch className="w-5 h-5" />
-            </button>
+
+          <form onSubmit={handleSearch} className="hidden md:flex items-center flex-1 max-w-xs lg:max-w-sm ms-auto">
+            <div className="relative w-full">
+              <FiSearch className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t.nav.search}
+                className="w-full ps-9 pe-3 py-2 rounded-xl text-sm border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+              />
+            </div>
           </form>
-          {/* زر تسجيل الخروج */}
-          <div className="flex items-center">
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-1 bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-full font-semibold text-sm md:text-base transition shadow focus:ring-2 focus:ring-red-200 min-w-[90px] md:min-w-[110px] h-9 md:h-10"
-              style={{lineHeight: 1.2}}
-            >
-              <FiLogOut className="w-4 h-4 md:w-5 md:h-5" />
-              <span className="hidden sm:inline">تسجيل الخروج</span>
-            </button>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            {user && (
+              <div className="hidden xl:flex flex-col items-end me-1">
+                <span className="text-xs font-semibold text-slate-900 dark:text-white">{user.username}</span>
+                <span className="text-[10px] text-slate-500">{roleLabel}</span>
+              </div>
+            )}
+            <LanguageToggle compact />
+            <ThemeToggle className="border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300" />
+            {user ? (
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 text-sm font-semibold transition-colors"
+              >
+                <FiLogOut className="w-4 h-4" />
+                <span className="hidden sm:inline">{t.nav.logout}</span>
+              </button>
+            ) : (
+              <Link
+                href="/login"
+                className="px-4 py-2 rounded-xl bg-primary-600 text-white text-sm font-semibold hover:bg-primary-500 transition-colors"
+              >
+                {t.nav.login}
+              </Link>
+            )}
           </div>
         </div>
-        {/* قائمة الجوال */}
-        {isMenuOpen && (
-          <div className="md:hidden mt-2 bg-white/95 rounded-2xl shadow-xl p-4 flex flex-col gap-4 animate-fadeIn border border-primary-100">
-            {navLinks.map(link => (
+
+        {mobileOpen && (
+          <div className="md:hidden pb-4 space-y-1 border-t border-slate-200 dark:border-white/10 pt-3">
+            {navItems.map((item) => (
               <Link
-                key={link.href}
-                href={link.href}
-                className="flex items-center gap-2 px-3 py-2 rounded-lg font-semibold text-primary-700 hover:bg-primary-100 hover:text-primary-900 transition-all"
-                onClick={() => setIsMenuOpen(false)}
+                key={item.href}
+                href={item.href}
+                onClick={() => setMobileOpen(false)}
+                className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium
+                  ${isActive(item.href) ? "bg-primary-500/15 text-primary-600" : "text-slate-600 dark:text-slate-400"}`}
               >
-                <span className="text-lg">{link.icon}</span>
-                <span>{link.label}</span>
+                {item.icon}
+                {item.label}
               </Link>
             ))}
-            <form onSubmit={handleSearch} className="flex items-center gap-2 bg-primary-50 rounded-full px-3 py-2 mt-2 border border-primary-100">
-              <input
-                type="text"
-                className="bg-transparent outline-none flex-1 px-2 py-1 text-primary-800 placeholder:text-primary-400"
-                placeholder="بحث متقدم... (اسم، رقم، ...الخ)"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-              />
-              <button type="submit" className="text-primary-600 hover:text-primary-800 p-1.5 rounded-full transition hover:bg-primary-100">
-                <FiSearch className="w-5 h-5" />
-              </button>
+            <form onSubmit={handleSearch} className="pt-2">
+              <div className="relative">
+                <FiSearch className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={t.nav.search}
+                  className="w-full ps-9 pe-3 py-2.5 rounded-xl text-sm border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5"
+                />
+              </div>
             </form>
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-1 bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-full font-semibold text-sm transition shadow focus:ring-2 focus:ring-red-200 mt-2 min-w-[90px] h-9"
-              style={{lineHeight: 1.2}}
-            >
-              <FiLogOut className="w-4 h-4" />
-              <span className="hidden sm:inline">تسجيل الخروج</span>
-            </button>
           </div>
         )}
       </nav>
     </header>
-  )
-} 
+  );
+}

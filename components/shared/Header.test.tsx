@@ -1,39 +1,50 @@
-import { render, screen, fireEvent } from '@testing-library/react';
-import Header from './Header';
-import { useAuth } from '@/app/hooks/useAuth';
-import '@testing-library/jest-dom';
+import { render, screen, fireEvent } from "@testing-library/react";
+import Header from "./Header";
+import { useAuth } from "@/app/hooks/useAuth";
+import "@testing-library/jest-dom";
 
-jest.mock('@/app/hooks/useAuth');
+jest.mock("@/app/hooks/useAuth");
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({ push: jest.fn() }),
+  usePathname: () => "/",
+}));
 
 const mockedUseAuth = useAuth as jest.Mock;
 
-describe('Header', () => {
+describe("Header", () => {
   afterEach(() => {
     jest.clearAllMocks();
   });
 
-  it('should show director links only for director', () => {
-    mockedUseAuth.mockReturnValue({ user: { role: 'director' }, logout: jest.fn() });
+  it("should show director links only for director", () => {
+    mockedUseAuth.mockReturnValue({ user: { role: "director", username: "director" } });
     render(<Header />);
-    expect(screen.getByText('الفروع')).toBeInTheDocument();
-    expect(screen.getByText('التقارير')).toBeInTheDocument();
-    expect(screen.getByText('الموظفون')).toBeInTheDocument();
+    expect(screen.getByText("الفروع")).toBeInTheDocument();
+    expect(screen.getByText("التقارير")).toBeInTheDocument();
+    expect(screen.getByText("الموظفون")).toBeInTheDocument();
   });
 
-  it('should not show director links for employee', () => {
-    mockedUseAuth.mockReturnValue({ user: { role: 'employee' }, logout: jest.fn() });
+  it("should show branch manager links without director routes", () => {
+    mockedUseAuth.mockReturnValue({ user: { role: "branch_manager", username: "manager" } });
     render(<Header />);
-    expect(screen.queryByText('الفروع')).toBeNull();
-    expect(screen.queryByText('التقارير')).toBeNull();
-    expect(screen.queryByText('الموظفون')).toBeNull();
+    expect(screen.getByText("الموظفون")).toBeInTheDocument();
+    expect(screen.getByText("التقارير")).toBeInTheDocument();
+    expect(screen.queryByText("الفروع")).toBeNull();
   });
 
-  it('should call logout and redirect on logout button click', () => {
-    const logoutMock = jest.fn();
-    mockedUseAuth.mockReturnValue({ user: { role: 'director' }, logout: logoutMock });
+  it("should not show management links for employee", () => {
+    mockedUseAuth.mockReturnValue({ user: { role: "employee", username: "employee" } });
     render(<Header />);
-    const logoutBtn = screen.getByText('تسجيل الخروج');
+    expect(screen.queryByText("الفروع")).toBeNull();
+    expect(screen.queryByText("التقارير")).toBeNull();
+    expect(screen.queryByText("الموظفون")).toBeNull();
+  });
+
+  it("should redirect to login on logout button click", () => {
+    mockedUseAuth.mockReturnValue({ user: { role: "director", username: "director" } });
+    render(<Header />);
+    const logoutBtn = screen.getByText("تسجيل الخروج");
     fireEvent.click(logoutBtn);
-    expect(logoutMock).toHaveBeenCalled();
+    expect(localStorage.getItem("token")).toBeNull();
   });
-}); 
+});

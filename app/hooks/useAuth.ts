@@ -49,29 +49,26 @@ export const useAuth = () => {
     return () => clearInterval(interval);
   }, []);
 
+  const persistSession = useCallback((response: LoginResponse) => {
+    localStorage.setItem('token', response.access_token);
+    localStorage.setItem('token_type', response.token_type || 'bearer');
+    localStorage.setItem('userRole', response.role);
+    localStorage.setItem('username', response.username);
+    localStorage.setItem('branchId', response.branch_id?.toString() || '');
+    localStorage.setItem('userId', response.user_id.toString());
+    setUser(response);
+    const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toUTCString();
+    document.cookie = `token=${response.access_token}; path=/; expires=${expires}`;
+    document.cookie = `userRole=${response.role}; path=/; expires=${expires}`;
+  }, []);
+
   // Login
   const login = useCallback(async (data: LoginRequest) => {
     try {
       setLoading(true);
       setError(null);
       const response = await authApi.login(data);
-      
-      // Save token and user data to localStorage
-      localStorage.setItem('token', response.access_token);
-      localStorage.setItem('token_type', response.token_type || 'bearer');
-      localStorage.setItem('userRole', response.role);
-      localStorage.setItem('username', response.username);
-      localStorage.setItem('branchId', response.branch_id?.toString() || '');
-      localStorage.setItem('userId', response.user_id.toString());
-      
-      // Save user data to state
-      setUser(response);
-      
-      // Set cookies for middleware
-      const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toUTCString();
-      document.cookie = `token=${response.access_token}; path=/; expires=${expires}`;
-      document.cookie = `userRole=${response.role}; path=/; expires=${expires}`;
-      
+      persistSession(response);
       return response;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'حدث خطأ أثناء تسجيل الدخول');
@@ -79,7 +76,22 @@ export const useAuth = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [persistSession]);
+
+  const demoLogin = useCallback(async (role: string) => {
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await authApi.demoLogin(role);
+      persistSession(response);
+      return response;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'حدث خطأ أثناء دخول الديمو');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, [persistSession]);
 
   // Change password
   const changePassword = useCallback(async (data: ChangePasswordRequest) => {
@@ -192,6 +204,7 @@ export const useAuth = () => {
     error,
     user,
     login,
+    demoLogin,
     logout,
     changePassword,
     resetPassword,

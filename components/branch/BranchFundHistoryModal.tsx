@@ -1,130 +1,107 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import axiosInstance from "@/app/api/axios";
-import { format } from "date-fns";
-import { ar } from "date-fns/locale";
 import BranchModal from "./BranchModal";
-import ModernButton from "../ui/ModernButton";
+import { Loader2 } from "lucide-react";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 interface BranchFundHistoryModalProps {
   open: boolean;
   onClose: () => void;
-  branch: {
-    id: string;
-    name: string;
-  };
+  branch: { id: string; name: string };
 }
 
-interface FundHistory {
-  id: string;
-  amount_syp: number;
-  amount_usd: number;
+interface FundHistoryRow {
+  date: string;
   type: string;
+  amount: number;
+  currency: string;
   description: string;
-  created_at: string;
 }
 
-const typeLabel = {
-  allocation: "إيداع",
-  deduction: "خصم"
-};
+export default function BranchFundHistoryModal({ open, onClose, branch }: BranchFundHistoryModalProps) {
+  const { t, locale } = useLocale();
+  const h = t.dashboard.branches.history;
 
-const currencyLabel = {
-  SYP: "ل.س",
-  USD: "$"
-};
-
-export default function BranchFundHistoryModal({
-  open,
-  onClose,
-  branch,
-}: BranchFundHistoryModalProps) {
-  const [history, setHistory] = useState<FundHistory[]>([]);
+  const [history, setHistory] = useState<FundHistoryRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (open && branch) {
-      fetchHistory();
-    }
-  }, [open, branch]);
+    if (!open || !branch?.id) return;
+    const fetchHistory = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const response = await axiosInstance.get(`/branches/${branch.id}/funds-history`);
+        setHistory(Array.isArray(response.data) ? response.data : []);
+      } catch {
+        setError(h.error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchHistory();
+  }, [open, branch?.id, h.error]);
 
-  const fetchHistory = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const response = await axiosInstance.get(`/branches/${branch.id}/fund-history`);
-      setHistory(response.data);
-    } catch (error) {
-      console.error("Error fetching fund history:", error);
-      setError("فشل في تحميل سجل الأموال");
-    } finally {
-      setLoading(false);
-    }
+  const typeLabel = (type: string) => {
+    if (type === "allocation" || type === "deposit") return h.types.add;
+    if (type === "deduction") return h.types.deduct;
+    return type;
   };
 
   if (!open) return null;
 
   return (
-    <BranchModal open={open} onClose={onClose} title={`سجل التمويل - ${branch?.name || "فرع"}`}>
+    <BranchModal open={open} onClose={onClose} title={`${h.title} — ${branch?.name || ""}`} wide>
       <div className="space-y-4">
         {loading ? (
-          <div className="text-center py-4">جاري التحميل...</div>
+          <div className="flex flex-col items-center py-10 gap-2 text-slate-500">
+            <Loader2 className="w-6 h-6 animate-spin" />
+            <span>{h.loading}</span>
+          </div>
         ) : error ? (
-          <div className="text-red-500 text-center py-4">{error}</div>
+          <p className="text-center text-red-500 py-6">{error}</p>
+        ) : history.length === 0 ? (
+          <p className="text-center text-slate-500 dark:text-slate-400 py-10">{h.empty}</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    التاريخ
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    النوع
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    المبلغ (ل.س)
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    المبلغ ($)
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    الوصف
-                  </th>
+          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-white/10">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="bg-slate-50 dark:bg-white/5 text-slate-500 dark:text-slate-400">
+                  {[h.columns.date, h.columns.type, h.columns.amount, h.columns.currency, h.columns.description].map((col) => (
+                    <th key={col} className="py-3 px-4 text-start font-semibold whitespace-nowrap">{col}</th>
+                  ))}
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {history.map((item) => (
-                  <tr key={item.id}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {format(new Date(item.created_at), "dd MMMM yyyy", {
-                        locale: ar,
-                      })}
+              <tbody className="divide-y divide-slate-100 dark:divide-white/5">
+                {history.map((item, idx) => (
+                  <tr key={`${item.date}-${idx}`} className="hover:bg-slate-50 dark:hover:bg-white/[0.02]">
+                    <td className="py-3 px-4 whitespace-nowrap text-slate-700 dark:text-slate-300">{item.date}</td>
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium
+                        ${item.type === "deduction" ? "bg-red-500/15 text-red-600 dark:text-red-400" : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"}`}>
+                        {typeLabel(item.type)}
+                      </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {item.type === "deposit" ? "إيداع" : "سحب"}
+                    <td className="py-3 px-4 tabular-nums font-medium text-slate-900 dark:text-white">
+                      {Math.abs(item.amount).toLocaleString(locale === "ar" ? "ar-SY" : "en-US")}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {item.amount_syp.toLocaleString()} ل.س
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {item.amount_usd.toLocaleString()} $
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {item.description}
-                    </td>
+                    <td className="py-3 px-4 text-slate-600 dark:text-slate-300">{item.currency}</td>
+                    <td className="py-3 px-4 text-slate-600 dark:text-slate-300 max-w-xs truncate">{item.description || "—"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
-        <div className="flex justify-end mt-4">
-          <ModernButton color="#e74c3c" onClick={onClose}>إغلاق</ModernButton>
+        <div className="flex justify-end pt-2">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-slate-200 font-medium hover:bg-slate-200 dark:hover:bg-white/15">
+            {t.dashboard.branches.modals.cancel}
+          </button>
         </div>
       </div>
     </BranchModal>
   );
-} 
+}

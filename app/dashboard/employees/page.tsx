@@ -1,467 +1,398 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
+import {
+  Users,
+  UserPlus,
+  Pencil,
+  Trash2,
+  RefreshCw,
+  Key,
+  Loader2,
+  Search,
+  UserCheck,
+} from "lucide-react";
 import EmployeeFormModal from "@/components/employee/EmployeeFormModal";
-import ModernButton from "@/components/ui/ModernButton";
+import ResetPasswordModal from "@/components/shared/ResetPasswordModal";
 import axiosInstance from "@/app/api/axios";
-import { format } from "date-fns";
-import { ar } from "date-fns/locale";
-import ResetPasswordModal from '@/components/shared/ResetPasswordModal';
-import { FiUser, FiUserCheck, FiUserX, FiEdit2, FiTrash2, FiKey } from "react-icons/fi";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 interface Employee {
   id: number;
   username: string;
   role: string;
-  branch_id: number;
-  branch_name: string;
+  branch_id: number | null;
+  branch_name: string | null;
   created_at?: string;
   is_active?: boolean;
-  full_name: string;
 }
 
-type SortField = "username" | "role" | "branch_name" | "created_at";
-type SortOrder = "asc" | "desc";
-
-const roles = ["الكل", "مدير فرع", "موظف تحويلات"];
+type RoleFilter = "all" | "director" | "branch_manager" | "employee";
 
 export default function EmployeesPage() {
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [filteredEmployees, setFilteredEmployees] = useState<Employee[]>([]);
-  const [search, setSearch] = useState("");
-  const [roleFilter, setRoleFilter] = useState("الكل");
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [showModal, setShowModal] = useState(false);
-  const [editData, setEditData] = useState<Employee | null>(null);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [sortField, setSortField] = useState<SortField>("username");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
-  const [branches, setBranches] = useState<{id: number, name: string}[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
-  const [successMessage, setSuccessMessage] = useState("");
-  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
-  const [isResetPasswordModalOpen, setIsResetPasswordModalOpen] = useState(false);
+  const { t, locale } = useLocale();
+  const e = t.dashboard.employees;
 
-  // جلب بيانات الموظفين
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  const [showModal, setShowModal] = useState(false);
+  const [editEmployee, setEditEmployee] = useState<Employee | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [resetTarget, setResetTarget] = useState<Employee | null>(null);
+
+  const selectedEmployee = employees.find((x) => x.id === selectedId);
+
+  const roleLabel = (role: string) =>
+    e.roles[role as keyof typeof e.roles] ?? role;
+
   const fetchEmployees = async () => {
-    setIsLoading(true);
-    setError("");
+    setLoading(true);
     try {
-      const response = await axiosInstance.get('/users/', {
-        params: {
-          role: roleFilter !== 'الكل' ? roleFilter : undefined,
-          search: search || undefined
-        }
+      const response = await axiosInstance.get("/users/", {
+        params: { per_page: 200, role: roleFilter !== "all" ? roleFilter : undefined, search: searchTerm || undefined },
       });
-      
-      const employeesData = (Array.isArray(response.data.items) ? response.data.items : [])
-        .map((emp: any) => ({
-          ...emp,
-          branch_name: emp.branch_name || branches.find(b => b.id === emp.branch_id)?.name || "غير محدد"
-        }));
-      
-      setEmployees(employeesData);
-      setFilteredEmployees(employeesData);
-    } catch (error: any) {
-      console.error('Error fetching employees:', error);
-      setErrorMessage(error.response?.data?.detail || "فشل في تحميل بيانات الموظفين");
+      setEmployees(Array.isArray(response.data.items) ? response.data.items : []);
+    } catch {
+      toast.error(e.errors.load);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
   useEffect(() => {
     fetchEmployees();
-  }, [roleFilter, search]);
+  }, [roleFilter]);
 
-  // جلب الفروع عند تحميل الصفحة
-  useEffect(() => {
-    const fetchBranches = async () => {
-      try {
-        const response = await axiosInstance.get('/branches/');
-        setBranches(Array.isArray(response.data.branches) ? response.data.branches : []);
-      } catch (e) {
-        // تجاهل الخطأ أو أضف رسالة
-      }
-    };
-    fetchBranches();
-  }, []);
+  const filteredEmployees = useMemo(() => {
+    if (!searchTerm.trim()) return employees;
+    const q = searchTerm.toLowerCase();
+    return employees.filter(
+      (emp) =>
+        emp.username.toLowerCase().includes(q) ||
+        (emp.branch_name ?? "").toLowerCase().includes(q) ||
+        roleLabel(emp.role).toLowerCase().includes(q)
+    );
+  }, [employees, searchTerm, e]);
 
-  // تصفية وترتيب الموظفين
-  useEffect(() => {
-    let result = [...employees];
+  const summary = useMemo(
+    () => ({
+      total: employees.length,
+      managers: employees.filter((x) => x.role === "branch_manager").length,
+      staff: employees.filter((x) => x.role === "employee").length,
+      withBranch: employees.filter((x) => x.branch_id).length,
+    }),
+    [employees]
+  );
 
-    // تطبيق البحث
-    if (search) {
-      const searchLower = search.toLowerCase();
-      result = result.filter(emp => 
-        emp.username.toLowerCase().includes(searchLower) ||
-        emp.branch_name.toLowerCase().includes(searchLower)
-      );
+  const formatDate = (value?: string) => {
+    if (!value) return "—";
+    try {
+      return new Date(value).toLocaleDateString(locale === "ar" ? "ar-SY" : "en-US", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      });
+    } catch {
+      return value;
     }
+  };
 
-    // تطبيق فلتر الدور
-    const roleMap: Record<string, string> = {
-      "مدير فرع": "branch_manager",
-      "موظف تحويلات": "employee"
-    };
-    if (roleFilter !== "الكل") {
-      result = result.filter(emp => emp.role === roleMap[roleFilter]);
-    }
-
-    // تطبيق الترتيب
-    result.sort((a, b) => {
-      let comparison = 0;
-      switch (sortField) {
-        case "username":
-          comparison = (a.username || "").localeCompare(b.username || "");
-          break;
-        case "role":
-          comparison = (a.role || "").localeCompare(b.role || "");
-          break;
-        case "branch_name":
-          comparison = (a.branch_name || "").localeCompare(b.branch_name || "");
-          break;
-        case "created_at":
-          comparison = new Date(a.created_at || "").getTime() - new Date(b.created_at || "").getTime();
-          break;
-      }
-      return sortOrder === "asc" ? comparison : -comparison;
-    });
-
-    setFilteredEmployees(result);
-  }, [employees, search, roleFilter, sortField, sortOrder]);
-
-  // عمليات الأزرار
-  const handleAdd = () => {
-    setEditData(null);
+  const openAdd = () => {
+    setEditEmployee(null);
     setShowModal(true);
   };
 
-  const handleEdit = () => {
-    if (!selectedId) return;
-    const emp = employees.find(e => e.id === selectedId);
-    setEditData(emp || null);
+  const openEdit = (emp: Employee) => {
+    setSelectedId(emp.id);
+    setEditEmployee(emp);
     setShowModal(true);
+  };
+
+  const openDelete = (emp: Employee) => {
+    if (emp.role === "director") {
+      toast.error(e.errors.cannotDeleteDirector);
+      return;
+    }
+    setSelectedId(emp.id);
+    setShowDeleteModal(true);
+  };
+
+  const handleSubmit = async (data: Record<string, unknown>) => {
+    try {
+      if (editEmployee) {
+        await axiosInstance.put(`/users/${editEmployee.id}`, data);
+        toast.success(e.success.update);
+      } else {
+        await axiosInstance.post("/users/", data);
+        toast.success(e.success.add);
+      }
+      setShowModal(false);
+      setEditEmployee(null);
+      await fetchEmployees();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : editEmployee ? e.errors.update : e.errors.add);
+    }
   };
 
   const handleDelete = async () => {
     if (!selectedId) return;
-    setIsLoading(true);
-    setError("");
     try {
       await axiosInstance.delete(`/users/${selectedId}`);
-      setSuccessMessage("تم حذف الموظف بنجاح");
-      setEmployees(employees.filter(emp => emp.id !== selectedId));
-      setDeleteConfirmOpen(false);
+      toast.success(e.success.delete);
+      setShowDeleteModal(false);
       setSelectedId(null);
-      fetchEmployees(); // تحديث القائمة
-    } catch (error: any) {
-      console.error('Error deleting employee:', error);
-      setErrorMessage(error.response?.data?.detail || "فشل في حذف الموظف");
-    } finally {
-      setIsLoading(false);
+      await fetchEmployees();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : e.errors.delete);
     }
-  };
-
-  const handleRefresh = () => {
-    fetchEmployees();
-    setSelectedId(null);
-  };
-
-  const handleSubmit = async (data: any) => {
-    setIsLoading(true);
-    setError("");
-    try {
-      let response;
-      if (editData) {
-        response = await axiosInstance.put(`/users/${editData.id}`, data);
-        setSuccessMessage("تم تحديث بيانات الموظف بنجاح");
-      } else {
-        response = await axiosInstance.post('/users/', data);
-        setSuccessMessage("تم إضافة الموظف بنجاح");
-      }
-
-      const branchName = response.data.branch_name ||
-        branches.find(b => Number(b.id) === Number(response.data.branch_id))?.name || "غير محدد";
-      
-      const updatedEmployee = { ...response.data, branch_name: branchName };
-      
-      if (editData) {
-        setEmployees(employees.map(emp => emp.id === editData.id ? updatedEmployee : emp));
-      } else {
-        setEmployees([...employees, updatedEmployee]);
-      }
-      
-      setShowModal(false);
-      fetchEmployees(); // تحديث القائمة
-    } catch (error: any) {
-      console.error('Error saving employee:', error);
-      setErrorMessage(error.response?.data?.detail || "فشل في حفظ بيانات الموظف");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // تغيير الترتيب
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortOrder(sortOrder === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortOrder("asc");
-    }
-  };
-
-  const handleResetPassword = (employee: Employee) => {
-    setSelectedEmployee(employee);
-    setIsResetPasswordModalOpen(true);
-  };
-
-  const handlePasswordResetSuccess = () => {
-    // تحديث قائمة الموظفين بعد تغيير كلمة المرور
-    fetchEmployees();
   };
 
   return (
-    <div className="container mx-auto px-2 sm:px-4 py-6 sm:py-8">
-      {isLoading && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-2xl shadow-2xl flex flex-col items-center">
-            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-500"></div>
-            <p className="mt-4 text-gray-700 font-semibold">جاري التحميل...</p>
-          </div>
+    <div className="space-y-6 max-w-7xl mx-auto">
+      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+        <div>
+          <h2 className="text-2xl md:text-3xl font-black text-slate-900 dark:text-white">{e.title}</h2>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">{e.subtitle}</p>
         </div>
-      )}
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          {selectedEmployee ? `${e.selected}: ${selectedEmployee.username}` : e.noSelection}
+        </p>
+      </div>
 
-      {errorMessage && (
-        <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg flex items-center justify-between">
-          <span>{errorMessage}</span>
-          <button className="text-xl font-bold hover:text-red-900" onClick={() => setErrorMessage("")}>×</button>
-        </div>
-      )}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard label={e.stats.total} value={summary.total} icon={Users} color="blue" />
+        <StatCard label={e.stats.managers} value={summary.managers} icon={UserCheck} color="violet" />
+        <StatCard label={e.stats.employees} value={summary.staff} icon={Users} color="emerald" />
+        <StatCard label={e.stats.withBranch} value={summary.withBranch} icon={UserPlus} color="amber" />
+      </div>
 
-      {successMessage && (
-        <div className="mb-4 p-4 bg-green-100 border border-green-400 text-green-700 rounded-lg flex items-center justify-between">
-          <span>{successMessage}</span>
-          <button className="text-xl font-bold hover:text-green-900" onClick={() => setSuccessMessage("")}>×</button>
-        </div>
-      )}
+      <div className="flex flex-wrap gap-2">
+        <ActionButton icon={UserPlus} label={e.actions.add} onClick={openAdd} color="emerald" />
+        <ActionButton icon={Pencil} label={e.actions.edit} onClick={() => selectedEmployee && openEdit(selectedEmployee)} disabled={!selectedEmployee} color="blue" />
+        <ActionButton icon={Trash2} label={e.actions.delete} onClick={() => selectedEmployee && openDelete(selectedEmployee)} disabled={!selectedEmployee || selectedEmployee.role === "director"} color="red" />
+        <ActionButton icon={RefreshCw} label={e.actions.refresh} onClick={fetchEmployees} color="slate" />
+      </div>
 
-      <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6">
-        <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
-          <h1 className="text-2xl font-bold text-primary-700">إدارة الموظفين</h1>
-          <div className="flex flex-wrap gap-2 sm:gap-4">
-            <ModernButton color="#2ecc71" onClick={handleAdd} className="min-w-[110px]">إضافة موظف</ModernButton>
-            <ModernButton color="#3498db" onClick={handleEdit} disabled={!selectedId} className="min-w-[90px]">تعديل</ModernButton>
-            <ModernButton color="#e74c3c" onClick={() => setDeleteConfirmOpen(true)} disabled={!selectedId} className="min-w-[80px]">حذف</ModernButton>
-            <ModernButton color="#f59e42" onClick={handleRefresh} className="min-w-[80px]">تحديث</ModernButton>
-          </div>
-        </div>
-
-        {/* فلاتر البحث */}
-        <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="md:col-span-2 relative">
+          <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <input
             type="text"
-            placeholder="بحث..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 px-4 py-2 text-right"
+            placeholder={e.search}
+            value={searchTerm}
+            onChange={(ev) => setSearchTerm(ev.target.value)}
+            className="w-full ps-10 pe-4 py-3 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white"
           />
-          <select
-            value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 px-4 py-2 text-right"
-          >
-            {roles.map(role => (
-              <option key={role} value={role}>{role}</option>
-            ))}
-          </select>
         </div>
+        <select
+          value={roleFilter}
+          onChange={(ev) => setRoleFilter(ev.target.value as RoleFilter)}
+          className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white"
+        >
+          <option value="all">{e.filterAll}</option>
+          <option value="director">{e.roles.director}</option>
+          <option value="branch_manager">{e.roles.branch_manager}</option>
+          <option value="employee">{e.roles.employee}</option>
+        </select>
+      </div>
 
-        {/* جدول الموظفين */}
-        <div className="hidden md:block overflow-x-auto rounded-2xl shadow-lg border border-primary-100">
-          <table className="min-w-full bg-white rounded-2xl overflow-hidden">
-            <thead className="bg-primary-50">
-              <tr>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider cursor-pointer" onClick={() => handleSort("username")}> 
-                  <span className="flex items-center gap-1 justify-end">
-                    <FiUser className="inline text-primary-400" /> اسم المستخدم {sortField === "username" && (sortOrder === "asc" ? "↑" : "↓")}
-                  </span>
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider cursor-pointer" onClick={() => handleSort("role")}> 
-                  <span className="flex items-center gap-1 justify-end">
-                    <FiUserCheck className="inline text-primary-400" /> الدور {sortField === "role" && (sortOrder === "asc" ? "↑" : "↓")}
-                  </span>
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider cursor-pointer" onClick={() => handleSort("branch_name")}>الفرع {sortField === "branch_name" && (sortOrder === "asc" ? "↑" : "↓")}</th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider cursor-pointer" onClick={() => handleSort("created_at")}>تاريخ الإنشاء {sortField === "created_at" && (sortOrder === "asc" ? "↑" : "↓")}</th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider">الحالة</th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider">الإجراءات</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-primary-100">
-              {Array.isArray(filteredEmployees) && filteredEmployees.map((employee) => (
-                <tr
-                  key={employee.id}
-                  onClick={() => setSelectedId(employee.id)}
-                  className={`cursor-pointer transition-all duration-200 hover:bg-primary-50/80 ${selectedId === employee.id ? 'bg-primary-100 shadow-md scale-[1.01] border-r-4 border-primary-400' : ''}`}
-                >
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900 font-medium flex items-center gap-2 justify-end">
-                    <FiUser className="text-primary-300" /> {employee.username}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900 flex items-center gap-2 justify-end">
-                    <FiUserCheck className="text-primary-300" /> {employee.role}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900">{employee.branch_name}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900">
-                    {employee.created_at ? format(new Date(employee.created_at), "dd MMMM yyyy", { locale: ar }) : "-"}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-2 py-1 inline-flex items-center gap-1 text-xs leading-5 font-semibold rounded-full shadow-sm
-                      ${employee.is_active ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200'}
-                    `}>
-                      {employee.is_active ? <FiUserCheck className="text-green-400" /> : <FiUserX className="text-red-400" />}
-                      {employee.is_active ? 'نشط' : 'غير نشط'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900">
-                    <div className="flex gap-2 justify-end">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleEdit(); }}
-                        className="bg-blue-50 hover:bg-blue-100 text-blue-700 p-2 rounded-full shadow transition border border-blue-100"
-                        title="تعديل"
-                      >
-                        <FiEdit2 size={18} />
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleResetPassword(employee); }}
-                        className="bg-green-50 hover:bg-green-100 text-green-700 p-2 rounded-full shadow transition border border-green-100"
-                        title="تغيير كلمة المرور"
-                      >
-                        <FiKey size={18} />
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setSelectedId(employee.id); setDeleteConfirmOpen(true); }}
-                        className="bg-red-50 hover:bg-red-100 text-red-700 p-2 rounded-full shadow transition border border-red-100"
-                        title="حذف"
-                      >
-                        <FiTrash2 size={18} />
-                      </button>
-                    </div>
-                  </td>
+      <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white dark:bg-slate-900/50 shadow-sm overflow-hidden">
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-3">
+            <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+            <p className="text-slate-500">{e.loading}</p>
+          </div>
+        ) : filteredEmployees.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-3 text-center px-6">
+            <Users className="w-12 h-12 text-slate-300 dark:text-slate-600" />
+            <p className="text-slate-500 dark:text-slate-400">{e.empty}</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="bg-slate-50 dark:bg-white/5 text-slate-500 dark:text-slate-400">
+                  {[e.columns.username, e.columns.role, e.columns.branch, e.columns.createdAt, e.columns.status, e.columns.actions].map((col) => (
+                    <th key={col} className="py-3 px-4 text-start font-semibold whitespace-nowrap">{col}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* عرض كروت في الشاشات الصغيرة */}
-        <div className="md:hidden flex flex-col gap-4">
-          {Array.isArray(filteredEmployees) && filteredEmployees.map((employee) => (
-            <div
-              key={employee.id}
-              onClick={() => setSelectedId(employee.id)}
-              className={`rounded-xl border border-primary-100 shadow-md p-4 transition-all duration-200 bg-white cursor-pointer hover:bg-primary-50/80 ${selectedId === employee.id ? 'bg-primary-100 border-primary-400 scale-[1.01]' : ''}`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <FiUser className="text-primary-400" />
-                  <span className="font-bold text-primary-900">{employee.username}</span>
-                </div>
-                <span className={`px-2 py-1 inline-flex items-center gap-1 text-xs leading-5 font-semibold rounded-full shadow-sm
-                  ${employee.is_active ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200'}
-                `}>
-                  {employee.is_active ? <FiUserCheck className="text-green-400" /> : <FiUserX className="text-red-400" />}
-                  {employee.is_active ? 'نشط' : 'غير نشط'}
-                </span>
-              </div>
-              <div className="flex flex-wrap gap-2 mb-2 text-sm text-primary-700">
-                <div className="flex items-center gap-1"><FiUserCheck className="text-primary-300" />{employee.role}</div>
-                <div className="flex items-center gap-1"><span className="font-bold">الفرع:</span> {employee.branch_name}</div>
-                <div className="flex items-center gap-1"><span className="font-bold">تاريخ الإنشاء:</span> {employee.created_at ? format(new Date(employee.created_at), "dd MMMM yyyy", { locale: ar }) : "-"}</div>
-              </div>
-              <div className="flex gap-2 justify-end mt-2">
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleEdit(); }}
-                  className="bg-blue-50 hover:bg-blue-100 text-blue-700 p-2 rounded-full shadow transition border border-blue-100"
-                  title="تعديل"
-                >
-                  <FiEdit2 size={18} />
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleResetPassword(employee); }}
-                  className="bg-green-50 hover:bg-green-100 text-green-700 p-2 rounded-full shadow transition border border-green-100"
-                  title="تغيير كلمة المرور"
-                >
-                  <FiKey size={18} />
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); setSelectedId(employee.id); setDeleteConfirmOpen(true); }}
-                  className="bg-red-50 hover:bg-red-100 text-red-700 p-2 rounded-full shadow transition border border-red-100"
-                  title="حذف"
-                >
-                  <FiTrash2 size={18} />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* النوافذ المنبثقة */}
-        {showModal && (
-          <EmployeeFormModal
-            open={showModal}
-            onClose={() => setShowModal(false)}
-            onSubmit={handleSubmit}
-            initialData={editData ? {
-              id: editData.id,
-              username: editData.username,
-              role: editData.role,
-              branchId: parseInt(editData.branch_id.toString())
-            } : undefined}
-          />
-        )}
-
-        {deleteConfirmOpen && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-xs w-full text-center">
-              <h3 className="text-lg font-bold mb-4 text-red-700">تأكيد الحذف</h3>
-              <p className="mb-6 text-gray-700">هل أنت متأكد من حذف هذا الموظف؟ لا يمكن التراجع عن هذا الإجراء.</p>
-              <div className="flex justify-center gap-4">
-                <button
-                  className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300 font-semibold"
-                  onClick={() => setDeleteConfirmOpen(false)}
-                >
-                  إلغاء
-                </button>
-                <button
-                  className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 font-semibold shadow"
-                  onClick={handleDelete}
-                >
-                  حذف
-                </button>
-              </div>
-            </div>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-white/5">
+                {filteredEmployees.map((employee) => (
+                  <tr
+                    key={employee.id}
+                    onClick={() => setSelectedId(employee.id)}
+                    className={`cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.03]
+                      ${selectedId === employee.id ? "bg-primary-500/10 ring-1 ring-inset ring-primary-500/30" : ""}`}
+                  >
+                    <td className="py-3 px-4 font-semibold text-slate-900 dark:text-white">{employee.username}</td>
+                    <td className="py-3 px-4">
+                      <span className="inline-flex px-2.5 py-1 rounded-full text-xs font-medium bg-slate-500/10 text-slate-700 dark:text-slate-300">
+                        {roleLabel(employee.role)}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-slate-600 dark:text-slate-300">
+                      {employee.branch_name || e.notAssigned}
+                    </td>
+                    <td className="py-3 px-4 text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                      {formatDate(employee.created_at)}
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold
+                        ${employee.is_active
+                          ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                          : "bg-slate-500/15 text-slate-600 dark:text-slate-400"}`}>
+                        {employee.is_active ? t.dashboard.status.active : t.dashboard.status.inactive}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4">
+                      <div className="flex gap-1" onClick={(ev) => ev.stopPropagation()}>
+                        <IconButton icon={Pencil} title={e.actions.edit} onClick={() => openEdit(employee)} color="blue" />
+                        <IconButton icon={Key} title={e.actions.resetPassword} onClick={() => setResetTarget(employee)} color="emerald" />
+                        {employee.role !== "director" && (
+                          <IconButton icon={Trash2} title={e.actions.delete} onClick={() => openDelete(employee)} color="red" />
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
-
-        {selectedEmployee && (
-          <ResetPasswordModal
-            isOpen={isResetPasswordModalOpen}
-            onClose={() => {
-              setIsResetPasswordModalOpen(false);
-              setSelectedEmployee(null);
-            }}
-            username={selectedEmployee.username}
-            onSuccess={handlePasswordResetSuccess}
-          />
-        )}
       </div>
+
+      <EmployeeFormModal
+        open={showModal}
+        onClose={() => { setShowModal(false); setEditEmployee(null); }}
+        onSubmit={handleSubmit}
+        initialData={editEmployee ? {
+          id: editEmployee.id,
+          username: editEmployee.username,
+          role: editEmployee.role,
+          branch_id: editEmployee.branch_id ?? undefined,
+        } : undefined}
+      />
+
+      {showDeleteModal && selectedEmployee && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900 p-6 shadow-xl">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">{e.modals.deleteTitle}</h3>
+            <p className="text-slate-500 dark:text-slate-400 mb-4">{e.modals.deleteMessage}</p>
+            <div className="rounded-xl bg-slate-50 dark:bg-white/5 p-4 mb-6 text-sm space-y-1">
+              <p><strong>{e.columns.username}:</strong> {selectedEmployee.username}</p>
+              <p><strong>{e.columns.role}:</strong> {roleLabel(selectedEmployee.role)}</p>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => setShowDeleteModal(false)} className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 dark:hover:bg-white/5">
+                {e.modals.cancel}
+              </button>
+              <button type="button" onClick={handleDelete} className="px-4 py-2 rounded-xl bg-red-600 text-white font-semibold hover:bg-red-500">
+                {e.modals.confirmDelete}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resetTarget && (
+        <ResetPasswordModal
+          isOpen={!!resetTarget}
+          onClose={() => setResetTarget(null)}
+          username={resetTarget.username}
+          onSuccess={fetchEmployees}
+        />
+      )}
     </div>
   );
-} 
+}
+
+function StatCard({
+  label,
+  value,
+  icon: Icon,
+  color,
+}: {
+  label: string;
+  value: string | number;
+  icon: React.ComponentType<{ className?: string }>;
+  color: "blue" | "emerald" | "amber" | "violet";
+}) {
+  const colors = {
+    blue: "from-blue-500/20 to-blue-600/5 border-blue-500/20 text-blue-600 dark:text-blue-400",
+    emerald: "from-emerald-500/20 to-emerald-600/5 border-emerald-500/20 text-emerald-600 dark:text-emerald-400",
+    amber: "from-amber-500/20 to-amber-600/5 border-amber-500/20 text-amber-600 dark:text-amber-400",
+    violet: "from-violet-500/20 to-violet-600/5 border-violet-500/20 text-violet-600 dark:text-violet-400",
+  };
+  return (
+    <div className={`rounded-2xl border bg-gradient-to-br p-4 ${colors[color]}`}>
+      <div className="flex items-center gap-2 mb-2 opacity-80">
+        <Icon className="w-4 h-4" />
+        <span className="text-xs font-semibold uppercase tracking-wide">{label}</span>
+      </div>
+      <p className="text-2xl font-black text-slate-900 dark:text-white tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+function ActionButton({
+  icon: Icon,
+  label,
+  onClick,
+  disabled,
+  color,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  color: "emerald" | "blue" | "red" | "slate";
+}) {
+  const colors = {
+    emerald: "bg-emerald-600 hover:bg-emerald-500",
+    blue: "bg-blue-600 hover:bg-blue-500",
+    red: "bg-red-600 hover:bg-red-500",
+    slate: "bg-slate-600 hover:bg-slate-500",
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-white text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${colors[color]}`}
+    >
+      <Icon className="w-4 h-4" />
+      {label}
+    </button>
+  );
+}
+
+function IconButton({
+  icon: Icon,
+  title,
+  onClick,
+  color,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  onClick: () => void;
+  color: "blue" | "emerald" | "red";
+}) {
+  const colors = {
+    blue: "text-blue-600 hover:bg-blue-500/10 dark:text-blue-400",
+    emerald: "text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400",
+    red: "text-red-600 hover:bg-red-500/10 dark:text-red-400",
+  };
+  return (
+    <button type="button" title={title} onClick={onClick} className={`p-2 rounded-lg transition-colors ${colors[color]}`}>
+      <Icon className="w-4 h-4" />
+    </button>
+  );
+}

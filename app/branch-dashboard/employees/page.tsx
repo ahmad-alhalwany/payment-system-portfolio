@@ -1,438 +1,463 @@
 "use client";
-import React, { useEffect, useState } from "react";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import {
-  Button,
-  CircularProgress,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Paper,
-  Stack,
-  Typography,
-  Tooltip,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  Alert,
-} from "@mui/material";
-import AddIcon from "@mui/icons-material/Add";
-import RefreshIcon from "@mui/icons-material/Refresh";
-import EditIcon from "@mui/icons-material/Edit";
-import DeleteIcon from "@mui/icons-material/Delete";
-import { useAuth } from "@/app/hooks/useAuth";
+  Users,
+  UserPlus,
+  Pencil,
+  Trash2,
+  RefreshCw,
+  Key,
+  Loader2,
+  Search,
+  UserCheck,
+  UserX,
+  Building2,
+} from "lucide-react";
+import EmployeeFormModal from "@/components/employee/EmployeeFormModal";
+import ResetPasswordModal from "@/components/shared/ResetPasswordModal";
+import EmployeesGuidePanel from "@/components/branch-manager/EmployeesGuidePanel";
 import axiosInstance from "@/app/api/axios";
-import ResetPasswordModal from '@/components/shared/ResetPasswordModal';
+import { branchEmployeesApi, type BranchEmployee } from "@/app/api/branch-employees";
+import { useAuth } from "@/app/hooks/useAuth";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
-// تعريف نوع بيانات الموظف
-interface Employee {
-  id: number;
-  username: string;
-  role: string;
-  active: boolean;
-  created_at: string;
-  branch_id: number;
-  branch_name?: string;
-}
-
-interface Branch {
-  id: number;
-  name: string;
-}
-
-// المستخدم الحالي (يمكنك ربطه مع auth لاحقًا)
-const currentUserId = 1;
+type StatusFilter = "all" | "active" | "inactive";
 
 export default function BranchEmployeesPage() {
+  const { t, locale } = useLocale();
+  const e = t.dashboard.manager.employees;
+  const statusLabels = t.dashboard.status;
   const { user } = useAuth();
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [openAdd, setOpenAdd] = useState(false);
-  const [openEdit, setOpenEdit] = useState(false);
-  const [openDelete, setOpenDelete] = useState(false);
-  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [formData, setFormData] = useState({
-    username: "",
-    password: "",
-    role: "employee",
-    branch_id: user?.branch_id?.toString() || "",
-  });
-  const [isResetPasswordModalOpen, setIsResetPasswordModalOpen] = useState(false);
 
-  // جلب البيانات من API
-  const fetchEmployees = async () => {
+  const [employees, setEmployees] = useState<BranchEmployee[]>([]);
+  const [branchName, setBranchName] = useState("");
+  const [stats, setStats] = useState({ total: 0, active: 0, inactive: 0 });
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  const [showModal, setShowModal] = useState(false);
+  const [editEmployee, setEditEmployee] = useState<BranchEmployee | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [resetTarget, setResetTarget] = useState<BranchEmployee | null>(null);
+
+  const selectedEmployee = employees.find((x) => x.id === selectedId);
+
+  const fetchEmployees = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
-      if (!user?.branch_id) throw new Error("لا يوجد فرع محدد");
-      const response = await axiosInstance.get(`/branches/${user.branch_id}/employees/`);
-      setEmployees(response.data);
-    } catch (e) {
-      setError("فشل تحميل بيانات الموظفين");
-      console.error('Error fetching employees:', e);
+      const { data } = await branchEmployeesApi.list({
+        search: searchTerm.trim() || undefined,
+        status: statusFilter === "all" ? undefined : statusFilter,
+      });
+      setEmployees(data.items);
+      setBranchName(data.branch.name);
+      setStats(data.stats);
+    } catch {
+      toast.error(e.errors.load);
     } finally {
       setLoading(false);
     }
-  };
-
-  const fetchBranches = async () => {
-    try {
-      const response = await axiosInstance.get("/branches");
-      setBranches(response.data.branches);
-    } catch (err) {
-      console.error("Error fetching branches:", err);
-    }
-  };
+  }, [searchTerm, statusFilter, e.errors.load]);
 
   useEffect(() => {
-    fetchEmployees();
-    fetchBranches();
-  }, []);
+    if (user?.branch_id) fetchEmployees();
+  }, [user?.branch_id, statusFilter, fetchEmployees]);
 
-  const handleAddEmployee = async () => {
+  const formatDate = (value?: string | null) => {
+    if (!value) return "—";
     try {
-      // تأكد من أن البيانات المرسلة تتوافق مع صلاحيات المستخدم
-      const employeeData = {
-        username: formData.username,
-        password: formData.password,
-        role: "employee", // دائماً موظف
-        branch_id: user?.branch_id, // دائماً فرع المدير
+      return new Date(value).toLocaleDateString(locale === "ar" ? "ar-SY" : "en-US", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      });
+    } catch {
+      return value;
+    }
+  };
+
+  const statCards = useMemo(
+    () => [
+      { label: e.stats.total, value: stats.total, icon: Users, color: "blue" as const },
+      { label: e.stats.active, value: stats.active, icon: UserCheck, color: "emerald" as const },
+      { label: e.stats.inactive, value: stats.inactive, icon: UserX, color: "amber" as const },
+    ],
+    [e.stats, stats]
+  );
+
+  const openAdd = () => {
+    setEditEmployee(null);
+    setShowModal(true);
+  };
+
+  const openEdit = (emp: BranchEmployee) => {
+    setSelectedId(emp.id);
+    setEditEmployee(emp);
+    setShowModal(true);
+  };
+
+  const openDelete = (emp: BranchEmployee) => {
+    if (emp.id === user?.user_id) {
+      toast.error(e.errors.cannotDeleteSelf);
+      return;
+    }
+    setSelectedId(emp.id);
+    setShowDeleteModal(true);
+  };
+
+  const handleSubmit = async (data: Record<string, unknown>) => {
+    try {
+      const payload = {
+        ...data,
+        role: "employee",
+        branch_id: user?.branch_id ?? data.branch_id,
       };
-      
-      const response = await axiosInstance.post("/users", employeeData);
-      setEmployees([...employees, response.data]);
-      setOpenAdd(false);
-      resetForm();
-    } catch (err) {
-      setError("فشل في إضافة الموظف");
-      console.error("Error adding employee:", err);
+      if (editEmployee) {
+        await axiosInstance.put(`/users/${editEmployee.id}`, payload);
+        toast.success(e.success.update);
+      } else {
+        await axiosInstance.post("/users/", payload);
+        toast.success(e.success.add);
+      }
+      setShowModal(false);
+      setEditEmployee(null);
+      await fetchEmployees();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : editEmployee ? e.errors.update : e.errors.add);
     }
   };
 
-  const handleEditEmployee = async () => {
-    if (!selectedEmployee) return;
+  const handleDelete = async () => {
+    if (!selectedId) return;
     try {
-      const employeeData = {
-        username: formData.username,
-        password: formData.password || undefined,
-        role: "employee", // دائماً موظف
-        branch_id: user?.branch_id, // دائماً فرع المدير
-      };
-      
-      const response = await axiosInstance.put(`/users/${selectedEmployee.id}`, employeeData);
-      setEmployees(employees.map(emp => emp.id === selectedEmployee.id ? response.data : emp));
-      setOpenEdit(false);
-      resetForm();
-    } catch (err) {
-      setError("فشل في تحديث بيانات الموظف");
-      console.error("Error updating employee:", err);
+      await axiosInstance.delete(`/users/${selectedId}`);
+      toast.success(e.success.delete);
+      setShowDeleteModal(false);
+      setSelectedId(null);
+      await fetchEmployees();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : e.errors.delete);
     }
   };
 
-  const handleDeleteEmployee = async () => {
-    if (!selectedEmployee) return;
-    try {
-      await axiosInstance.delete(`/branch/employees/${selectedEmployee.id}`);
-      setEmployees(employees.filter(emp => emp.id !== selectedEmployee.id));
-      setOpenDelete(false);
-    } catch (err) {
-      setError("فشل في حذف الموظف");
-      console.error("Error deleting employee:", err);
-    }
-  };
-
-  const resetForm = () => {
-    setFormData({
-      username: "",
-      password: "",
-      role: "employee",
-      branch_id: user?.branch_id?.toString() || "",
-    });
-    setSelectedEmployee(null);
-  };
-
-  const handleOpenEdit = (employee: Employee) => {
-    setSelectedEmployee(employee);
-    setFormData({
-      username: employee.username,
-      password: "",
-      role: "employee",
-      branch_id: user?.branch_id?.toString() || "",
-    });
-    setOpenEdit(true);
-  };
-
-  const handleOpenDelete = (employee: Employee) => {
-    setSelectedEmployee(employee);
-    setOpenDelete(true);
-  };
-
-  const handleOpenResetPassword = (employee: Employee) => {
-    setSelectedEmployee(employee);
-    setIsResetPasswordModalOpen(true);
-  };
-
-  const handlePasswordResetSuccess = () => {
+  const handleSearchSubmit = (ev: React.FormEvent) => {
+    ev.preventDefault();
     fetchEmployees();
   };
 
   return (
-    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #f0f4ff 0%, #e0f7fa 100%)', padding: '24px 0' }}>
-      <div style={{ maxWidth: 1200, margin: '0 auto', borderRadius: 24, boxShadow: '0 4px 24px #0001', background: 'rgba(255,255,255,0.95)', padding: 24 }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3}>
-          <Typography variant="h5" component="h1" sx={{ fontWeight: 900, color: '#1976d2', letterSpacing: 1, textShadow: '0 1px 2px #0001' }}>
-            إدارة الموظفين
-          </Typography>
-          <Stack direction="row" spacing={1}>
-            <Button
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={() => setOpenAdd(true)}
-              sx={{ borderRadius: 99, fontWeight: 700, fontSize: { xs: 13, md: 15 }, px: 2.5, py: 1.2, boxShadow: '0 2px 8px #1976d220' }}
-            >
-              إضافة موظف
-            </Button>
-            <Button
-              variant="outlined"
-              startIcon={<RefreshIcon />}
-              onClick={fetchEmployees}
-              sx={{ borderRadius: 99, fontWeight: 700, fontSize: { xs: 13, md: 15 }, px: 2, py: 1.2 }}
-            >
-              تحديث
-            </Button>
-          </Stack>
-        </Stack>
-        {error && (
-          <Alert severity="error" sx={{ mb: 2, borderRadius: 2, fontWeight: 600, fontSize: 16, boxShadow: '0 2px 8px #f4433620' }}>
-            {error}
-          </Alert>
-        )}
-        <TableContainer component={Paper} sx={{ borderRadius: 4, boxShadow: '0 2px 16px #1976d210', mb: 4 }}>
-          <Table>
-            <TableHead>
-              <TableRow sx={{ background: 'linear-gradient(90deg, #e3f2fd 60%, #b2ebf2 100%)' }}>
-                <TableCell sx={{ fontWeight: 800, fontSize: 16 }}>اسم المستخدم</TableCell>
-                <TableCell sx={{ fontWeight: 800, fontSize: 16 }}>الدور</TableCell>
-                <TableCell sx={{ fontWeight: 800, fontSize: 16 }}>الفرع</TableCell>
-                <TableCell sx={{ fontWeight: 800, fontSize: 16 }}>الحالة</TableCell>
-                <TableCell sx={{ fontWeight: 800, fontSize: 16 }}>تاريخ الإنشاء</TableCell>
-                <TableCell sx={{ fontWeight: 800, fontSize: 16 }}>الإجراءات</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={6} align="center">
-                    <CircularProgress />
-                  </TableCell>
-                </TableRow>
-              ) : employees.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} align="center">
-                    لا يوجد موظفين
-                  </TableCell>
-                </TableRow>
-              ) : (
-                employees.map((employee) => (
-                  <TableRow key={employee.id} sx={{ transition: 'background 0.2s', '&:hover': { background: '#e3f2fd55' } }}>
-                    <TableCell sx={{ fontWeight: 600 }}>{employee.username}</TableCell>
-                    <TableCell>{employee.role === "branch_manager" ? "مدير فرع" : "موظف"}</TableCell>
-                    <TableCell>{employee.branch_name || "غير محدد"}</TableCell>
-                    <TableCell>
-                      <span style={{
-                        display: 'inline-block',
-                        minWidth: 64,
-                        padding: '3px 12px',
-                        borderRadius: 12,
-                        fontWeight: 700,
-                        fontSize: 14,
-                        background: employee.active ? '#e8f5e9' : '#ffebee',
-                        color: employee.active ? '#388e3c' : '#d32f2f',
-                        boxShadow: '0 1px 4px #0001',
-                        textAlign: 'center',
-                      }}>
-                        {employee.active ? "نشط" : "غير نشط"}
-                      </span>
-                    </TableCell>
-                    <TableCell>{new Date(employee.created_at).toLocaleDateString("ar-SA")}</TableCell>
-                    <TableCell>
-                      <Stack direction="row" spacing={0.5}>
-                        <Tooltip title="تعديل">
-                          <Button
-                            size="small"
-                            startIcon={<EditIcon />}
-                            onClick={() => handleOpenEdit(employee)}
-                            sx={{ borderRadius: 99, minWidth: 0, px: 1.5, py: 0.5, fontWeight: 700, fontSize: 13 }}
-                          >
-                            تعديل
-                          </Button>
-                        </Tooltip>
-                        <Tooltip title="تغيير كلمة المرور">
-                          <Button
-                            size="small"
-                            color="success"
-                            onClick={() => handleOpenResetPassword(employee)}
-                            sx={{ borderRadius: 99, minWidth: 0, px: 1.5, py: 0.5, fontWeight: 700, fontSize: 13 }}
-                          >
-                            تغيير كلمة المرور
-                          </Button>
-                        </Tooltip>
-                        <Tooltip title="حذف">
-                          <Button
-                            size="small"
-                            color="error"
-                            startIcon={<DeleteIcon />}
-                            onClick={() => handleOpenDelete(employee)}
-                            sx={{ borderRadius: 99, minWidth: 0, px: 1.5, py: 0.5, fontWeight: 700, fontSize: 13 }}
-                          >
-                            حذف
-                          </Button>
-                        </Tooltip>
-                      </Stack>
-                    </TableCell>
-                  </TableRow>
-                ))
+    <div className="max-w-7xl mx-auto px-4 py-8">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+        <div className="xl:col-span-2 space-y-6">
+          <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+            <div>
+              <h1 className="text-2xl md:text-3xl font-black text-slate-900 dark:text-white">{e.title}</h1>
+              <p className="text-slate-500 dark:text-slate-400 mt-1">{e.subtitle}</p>
+              {branchName && (
+                <p className="flex items-center gap-1.5 text-sm text-primary-600 dark:text-primary-400 mt-2 font-medium">
+                  <Building2 className="w-4 h-4" />
+                  {e.branchLabel}: {branchName}
+                </p>
               )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-        {/* Add Employee Dialog */}
-        <Dialog open={openAdd} onClose={() => setOpenAdd(false)} PaperProps={{ sx: { borderRadius: 4, p: 1 } }}>
-          <DialogTitle sx={{ fontWeight: 800, color: '#1976d2', textAlign: 'center' }}>إضافة موظف جديد</DialogTitle>
-          <DialogContent>
-            <Stack spacing={2} sx={{ mt: 2 }}>
-              <TextField
-                label="اسم المستخدم"
-                value={formData.username}
-                onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                fullWidth
-                variant="outlined"
-                sx={{ borderRadius: 2, background: '#f5faff' }}
+            </div>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              {selectedEmployee ? `${e.selected}: ${selectedEmployee.username}` : e.noSelection}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {statCards.map(({ label, value, icon: Icon, color }) => (
+              <StatCard key={label} label={label} value={value} icon={Icon} color={color} />
+            ))}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <ActionButton icon={UserPlus} label={e.actions.add} onClick={openAdd} color="emerald" />
+            <ActionButton
+              icon={Pencil}
+              label={e.actions.edit}
+              onClick={() => selectedEmployee && openEdit(selectedEmployee)}
+              disabled={!selectedEmployee}
+              color="blue"
+            />
+            <ActionButton
+              icon={Key}
+              label={e.actions.resetPassword}
+              onClick={() => selectedEmployee && setResetTarget(selectedEmployee)}
+              disabled={!selectedEmployee}
+              color="violet"
+            />
+            <ActionButton
+              icon={Trash2}
+              label={e.actions.delete}
+              onClick={() => selectedEmployee && openDelete(selectedEmployee)}
+              disabled={!selectedEmployee || selectedEmployee.id === user?.user_id}
+              color="red"
+            />
+            <ActionButton icon={RefreshCw} label={e.actions.refresh} onClick={fetchEmployees} color="slate" />
+          </div>
+
+          <form onSubmit={handleSearchSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="md:col-span-2 relative">
+              <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                placeholder={e.search}
+                value={searchTerm}
+                onChange={(ev) => setSearchTerm(ev.target.value)}
+                className="w-full ps-10 pe-4 py-3 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white"
               />
-              <TextField
-                label="كلمة المرور"
-                type="password"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                fullWidth
-                variant="outlined"
-                sx={{ borderRadius: 2, background: '#f5faff' }}
-              />
-              <FormControl fullWidth sx={{ borderRadius: 2, background: '#f5faff' }}>
-                <InputLabel>الدور</InputLabel>
-                <Select
-                  value="employee"
-                  label="الدور"
-                  disabled
+            </div>
+            <select
+              value={statusFilter}
+              onChange={(ev) => setStatusFilter(ev.target.value as StatusFilter)}
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white"
+            >
+              <option value="all">{e.filterAll}</option>
+              <option value="active">{e.filterActive}</option>
+              <option value="inactive">{e.filterInactive}</option>
+            </select>
+          </form>
+
+          <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white dark:bg-slate-900/50 shadow-sm overflow-hidden">
+            {loading ? (
+              <div className="flex flex-col items-center justify-center py-20 gap-3">
+                <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+                <p className="text-slate-500">{e.loading}</p>
+              </div>
+            ) : employees.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 gap-3 text-center px-6">
+                <Users className="w-12 h-12 text-slate-300 dark:text-slate-600" />
+                <p className="text-slate-500 dark:text-slate-400">{e.empty}</p>
+                <button
+                  type="button"
+                  onClick={openAdd}
+                  className="mt-2 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 text-white font-semibold hover:bg-emerald-500 transition-colors"
                 >
-                  <MenuItem value="employee">موظف تحويلات</MenuItem>
-                </Select>
-              </FormControl>
-              <FormControl fullWidth sx={{ borderRadius: 2, background: '#f5faff' }}>
-                <InputLabel>الفرع</InputLabel>
-                <Select
-                  value={user?.branch_id?.toString() || ""}
-                  label="الفرع"
-                  disabled
-                >
-                  <MenuItem value={user?.branch_id?.toString() || ""}>
-                    {branches.find(b => b.id === user?.branch_id)?.name || "الفرع الحالي"}
-                  </MenuItem>
-                </Select>
-              </FormControl>
-            </Stack>
-          </DialogContent>
-          <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
-            <Button onClick={() => setOpenAdd(false)} sx={{ borderRadius: 99, fontWeight: 700 }}>إلغاء</Button>
-            <Button onClick={handleAddEmployee} variant="contained" sx={{ borderRadius: 99, fontWeight: 700 }}>إضافة</Button>
-          </DialogActions>
-        </Dialog>
-        {/* Edit Employee Dialog */}
-        <Dialog open={openEdit} onClose={() => setOpenEdit(false)} PaperProps={{ sx: { borderRadius: 4, p: 1 } }}>
-          <DialogTitle sx={{ fontWeight: 800, color: '#1976d2', textAlign: 'center' }}>تعديل بيانات الموظف</DialogTitle>
-          <DialogContent>
-            <Stack spacing={2} sx={{ mt: 2 }}>
-              <TextField
-                label="اسم المستخدم"
-                value={formData.username}
-                onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                fullWidth
-                variant="outlined"
-                sx={{ borderRadius: 2, background: '#f5faff' }}
-              />
-              <TextField
-                label="كلمة المرور الجديدة (اختياري)"
-                type="password"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                fullWidth
-                variant="outlined"
-                sx={{ borderRadius: 2, background: '#f5faff' }}
-              />
-              <FormControl fullWidth sx={{ borderRadius: 2, background: '#f5faff' }}>
-                <InputLabel>الدور</InputLabel>
-                <Select
-                  value="employee"
-                  label="الدور"
-                  disabled
-                >
-                  <MenuItem value="employee">موظف تحويلات</MenuItem>
-                </Select>
-              </FormControl>
-              <FormControl fullWidth sx={{ borderRadius: 2, background: '#f5faff' }}>
-                <InputLabel>الفرع</InputLabel>
-                <Select
-                  value={user?.branch_id?.toString() || ""}
-                  label="الفرع"
-                  disabled
-                >
-                  <MenuItem value={user?.branch_id?.toString() || ""}>
-                    {branches.find(b => b.id === user?.branch_id)?.name || "الفرع الحالي"}
-                  </MenuItem>
-                </Select>
-              </FormControl>
-            </Stack>
-          </DialogContent>
-          <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
-            <Button onClick={() => setOpenEdit(false)} sx={{ borderRadius: 99, fontWeight: 700 }}>إلغاء</Button>
-            <Button onClick={handleEditEmployee} variant="contained" sx={{ borderRadius: 99, fontWeight: 700 }}>حفظ</Button>
-          </DialogActions>
-        </Dialog>
-        {/* Delete Confirmation Dialog */}
-        <Dialog open={openDelete} onClose={() => setOpenDelete(false)} PaperProps={{ sx: { borderRadius: 4, p: 1 } }}>
-          <DialogTitle sx={{ fontWeight: 800, color: '#d32f2f', textAlign: 'center' }}>تأكيد الحذف</DialogTitle>
-          <DialogContent>
-            <Typography sx={{ fontWeight: 600, color: '#d32f2f', textAlign: 'center', py: 2 }}>
-              هل أنت متأكد من حذف الموظف {selectedEmployee?.username}؟
-            </Typography>
-          </DialogContent>
-          <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
-            <Button onClick={() => setOpenDelete(false)} sx={{ borderRadius: 99, fontWeight: 700 }}>إلغاء</Button>
-            <Button onClick={handleDeleteEmployee} color="error" variant="contained" sx={{ borderRadius: 99, fontWeight: 700 }}>حذف</Button>
-          </DialogActions>
-        </Dialog>
-        {selectedEmployee && (
-          <ResetPasswordModal
-            isOpen={isResetPasswordModalOpen}
-            onClose={() => {
-              setIsResetPasswordModalOpen(false);
-              setSelectedEmployee(null);
-            }}
-            username={selectedEmployee.username}
-            onSuccess={handlePasswordResetSuccess}
-          />
-        )}
+                  <UserPlus className="w-4 h-4" />
+                  {e.actions.add}
+                </button>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 dark:bg-white/5 text-slate-500 dark:text-slate-400">
+                      {[e.columns.username, e.columns.branch, e.columns.createdAt, e.columns.status, e.columns.actions].map(
+                        (col) => (
+                          <th key={col} className="py-3 px-4 text-start font-semibold whitespace-nowrap">
+                            {col}
+                          </th>
+                        )
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-white/5">
+                    {employees.map((emp) => (
+                      <tr
+                        key={emp.id}
+                        onClick={() => setSelectedId(emp.id)}
+                        className={`cursor-pointer transition-colors hover:bg-slate-50/80 dark:hover:bg-white/[0.02] ${
+                          selectedId === emp.id ? "bg-primary-500/5 ring-1 ring-inset ring-primary-500/20" : ""
+                        }`}
+                      >
+                        <td className="py-3 px-4 font-semibold text-slate-900 dark:text-white">{emp.username}</td>
+                        <td className="py-3 px-4 text-slate-600 dark:text-slate-300">{emp.branch_name ?? branchName}</td>
+                        <td className="py-3 px-4 text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                          {formatDate(emp.created_at)}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span
+                            className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
+                              emp.is_active
+                                ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 ring-1 ring-emerald-500/20"
+                                : "bg-red-500/15 text-red-700 dark:text-red-400 ring-1 ring-red-500/20"
+                            }`}
+                          >
+                            {emp.is_active ? statusLabels.active : statusLabels.inactive}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="flex gap-1" onClick={(ev) => ev.stopPropagation()}>
+                            <RowBtn icon={Pencil} title={e.actions.edit} onClick={() => openEdit(emp)} />
+                            <RowBtn icon={Key} title={e.actions.resetPassword} onClick={() => setResetTarget(emp)} />
+                            <RowBtn
+                              icon={Trash2}
+                              title={e.actions.delete}
+                              onClick={() => openDelete(emp)}
+                              disabled={emp.id === user?.user_id}
+                              danger
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="xl:col-span-1">
+          <EmployeesGuidePanel />
+        </div>
       </div>
+
+      <EmployeeFormModal
+        open={showModal}
+        onClose={() => {
+          setShowModal(false);
+          setEditEmployee(null);
+        }}
+        onSubmit={handleSubmit}
+        initialData={
+          editEmployee
+            ? {
+                id: editEmployee.id,
+                username: editEmployee.username,
+                role: "employee",
+                branch_id: editEmployee.branch_id ?? user?.branch_id ?? undefined,
+              }
+            : undefined
+        }
+      />
+
+      {showDeleteModal && selectedEmployee && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900 p-6 shadow-xl">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">{e.modals.deleteTitle}</h3>
+            <p className="text-slate-500 dark:text-slate-400 mb-4">{e.modals.deleteMessage}</p>
+            <div className="rounded-xl bg-slate-50 dark:bg-white/5 p-4 mb-6 text-sm">
+              <p>
+                <strong>{e.columns.username}:</strong> {selectedEmployee.username}
+              </p>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowDeleteModal(false)}
+                className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 dark:hover:bg-white/5"
+              >
+                {e.modals.cancel}
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                className="px-4 py-2 rounded-xl bg-red-600 text-white font-semibold hover:bg-red-500"
+              >
+                {e.modals.confirmDelete}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resetTarget && (
+        <ResetPasswordModal
+          isOpen={!!resetTarget}
+          onClose={() => setResetTarget(null)}
+          username={resetTarget.username}
+          onSuccess={fetchEmployees}
+        />
+      )}
     </div>
   );
-} 
+}
+
+function StatCard({
+  label,
+  value,
+  icon: Icon,
+  color,
+}: {
+  label: string;
+  value: number;
+  icon: React.ComponentType<{ className?: string }>;
+  color: "blue" | "emerald" | "amber" | "violet";
+}) {
+  const colors = {
+    blue: "from-blue-500/20 to-blue-600/5 border-blue-500/20 text-blue-600 dark:text-blue-400",
+    emerald: "from-emerald-500/20 to-emerald-600/5 border-emerald-500/20 text-emerald-600 dark:text-emerald-400",
+    amber: "from-amber-500/20 to-amber-600/5 border-amber-500/20 text-amber-600 dark:text-amber-400",
+    violet: "from-violet-500/20 to-violet-600/5 border-violet-500/20 text-violet-600 dark:text-violet-400",
+  };
+  return (
+    <div className={`rounded-2xl border bg-gradient-to-br p-4 ${colors[color]}`}>
+      <div className="flex items-center gap-2 mb-2 opacity-80">
+        <Icon className="w-4 h-4" />
+        <span className="text-xs font-semibold uppercase tracking-wide">{label}</span>
+      </div>
+      <p className="text-2xl font-black text-slate-900 dark:text-white tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+function ActionButton({
+  icon: Icon,
+  label,
+  onClick,
+  disabled,
+  color,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  color: "emerald" | "blue" | "red" | "slate" | "violet";
+}) {
+  const colors = {
+    emerald: "bg-emerald-600 hover:bg-emerald-500",
+    blue: "bg-blue-600 hover:bg-blue-500",
+    red: "bg-red-600 hover:bg-red-500",
+    slate: "bg-slate-600 hover:bg-slate-500",
+    violet: "bg-violet-600 hover:bg-violet-500",
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-white text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${colors[color]}`}
+    >
+      <Icon className="w-4 h-4" />
+      {label}
+    </button>
+  );
+}
+
+function RowBtn({
+  icon: Icon,
+  title,
+  onClick,
+  disabled,
+  danger,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  onClick: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      className={`p-1.5 rounded-lg transition-colors disabled:opacity-30 ${
+        danger
+          ? "text-slate-500 hover:text-red-600 hover:bg-red-500/10"
+          : "text-slate-500 hover:text-primary-600 hover:bg-primary-500/10"
+      }`}
+    >
+      <Icon className="w-4 h-4" />
+    </button>
+  );
+}

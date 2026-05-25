@@ -1,0 +1,15 @@
+{
+  "systemName": "Test System",
+  "companyName": "Test Co",
+  "adminEmail": "admin@test.com",
+  "defaultCurrency": "SYP",
+  "mainPhone": "0912345678",
+  "receiptFooter": "Thank you",
+  "transferMinAmount": 500.0,
+  "transferMaxAmount": 0.0,
+  "requireReceiverPhone": true,
+  "requireCompletedForTax": true,
+  "defaultLocale": "ar",
+  "updatedAt": "2026-05-25T12:29:32.351039+00:00",
+  "updatedBy": "director"
+}

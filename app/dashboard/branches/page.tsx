@@ -1,14 +1,25 @@
 "use client";
-import React, { useState, useEffect } from "react";
-import ModernButton from "@/components/ui/ModernButton";
+
+import { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
+import {
+  Building2,
+  GitBranchPlus,
+  Pencil,
+  Trash2,
+  Wallet,
+  Percent,
+  History,
+  Loader2,
+  Search,
+} from "lucide-react";
 import BranchModal from "@/components/branch/BranchModal";
 import BranchForm from "@/components/branch/BranchForm";
 import BranchFundHistoryModal from "@/components/branch/BranchFundHistoryModal";
+import BranchFundsModal from "@/components/branch/BranchFundsModal";
 import BranchTaxModal from "@/components/branch/BranchTaxModal";
 import axiosInstance from "@/app/api/axios";
-import { format } from "date-fns";
-import { ar } from "date-fns/locale";
-import { FiCheckCircle, FiXCircle } from "react-icons/fi";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 interface Branch {
   id: number;
@@ -22,54 +33,35 @@ interface Branch {
   allocated_amount_usd: number;
   tax_rate: number;
   status: string;
-  created_at: string;
-  updated_at: string;
-  balance: {
-    SYP: number;
-    USD: number;
-  };
 }
 
-type SortField = "name" | "location" | "governorate" | "employee_count" | "allocated_amount_syp" | "allocated_amount_usd" | "tax_rate";
-type SortOrder = "asc" | "desc";
-
 export default function BranchesPage() {
+  const { t } = useLocale();
+  const b = t.dashboard.branches;
+
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [filteredBranches, setFilteredBranches] = useState<Branch[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [selectedBranchId, setSelectedBranchId] = useState<number | null>(null);
+
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [showDetailsModal, setShowDetailsModal] = useState(false);
-  const [showFundHistoryModal, setShowFundHistoryModal] = useState(false);
+  const [showFundsModal, setShowFundsModal] = useState(false);
   const [showTaxModal, setShowTaxModal] = useState(false);
-  const [selectedBranchId, setSelectedBranchId] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [sortField, setSortField] = useState<SortField>("name");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
-  const [successMsg, setSuccessMsg] = useState("");
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
 
-  // جلب بيانات الفروع
+  const selectedBranch = branches.find((x) => x.id === selectedBranchId);
+
   const fetchBranches = async () => {
     setLoading(true);
-    setError("");
     try {
-      const response = await axiosInstance.get('/branches/?include_employee_count=true');
-      setBranches(Array.isArray(response.data.branches)
-        ? response.data.branches
-        : Array.isArray(response.data)
-          ? response.data
-          : []);
-      setFilteredBranches(Array.isArray(response.data.branches)
-        ? response.data.branches
-        : Array.isArray(response.data)
-          ? response.data
-          : []);
-    } catch (error) {
-      console.error('Error fetching branches:', error);
-      setError("فشل في تحميل بيانات الفروع");
+      const response = await axiosInstance.get("/branches/?include_employee_count=true");
+      const list = response.data.branches ?? response.data;
+      setBranches(Array.isArray(list) ? list : []);
+    } catch {
+      toast.error(b.errors.load);
     } finally {
       setLoading(false);
     }
@@ -79,289 +71,316 @@ export default function BranchesPage() {
     fetchBranches();
   }, []);
 
-  // تصفية وترتيب الفروع
-  useEffect(() => {
+  const filteredBranches = useMemo(() => {
     let result = [...branches];
-
-    // تطبيق البحث
-    if (searchTerm) {
-      const searchLower = searchTerm.toLowerCase();
-      result = result.filter(branch => 
-        branch.name.toLowerCase().includes(searchLower) ||
-        branch.location.toLowerCase().includes(searchLower) ||
-        branch.governorate.toLowerCase().includes(searchLower) ||
-        branch.branch_id.toLowerCase().includes(searchLower)
+    if (searchTerm.trim()) {
+      const q = searchTerm.toLowerCase();
+      result = result.filter(
+        (branch) =>
+          branch.name.toLowerCase().includes(q) ||
+          branch.location.toLowerCase().includes(q) ||
+          branch.governorate.toLowerCase().includes(q) ||
+          branch.branch_id.toLowerCase().includes(q)
       );
     }
-
-    // تطبيق فلتر الحالة
     if (statusFilter !== "all") {
-      result = result.filter(branch => branch.status === statusFilter);
+      result = result.filter((branch) => branch.status === statusFilter);
     }
+    return result;
+  }, [branches, searchTerm, statusFilter]);
 
-    // تطبيق الترتيب
-    result.sort((a, b) => {
-      let comparison = 0;
-      switch (sortField) {
-        case "name":
-        case "location":
-        case "governorate":
-          comparison = (a[sortField] ?? '').localeCompare(b[sortField] ?? '');
-          break;
-        case "employee_count":
-        case "allocated_amount_syp":
-        case "allocated_amount_usd":
-        case "tax_rate":
-          comparison = a[sortField] - b[sortField];
-          break;
-      }
-      return sortOrder === "asc" ? comparison : -comparison;
-    });
+  const summary = useMemo(() => ({
+    total: branches.length,
+    active: branches.filter((b) => b.status === "active").length,
+    totalSyp: branches.reduce((s, b) => s + (b.allocated_amount_syp ?? 0), 0),
+    totalUsd: branches.reduce((s, b) => s + (b.allocated_amount_usd ?? 0), 0),
+  }), [branches]);
 
-    setFilteredBranches(result);
-  }, [branches, searchTerm, statusFilter, sortField, sortOrder]);
-
-  // إضافة فرع جديد
-  const handleAddBranch = async (data: any) => {
+  const handleAddBranch = async (data: Record<string, unknown>) => {
     try {
-      const response = await axiosInstance.post('/branches/', data);
-      setSuccessMsg("تمت إضافة الفرع بنجاح!");
-      await fetchBranches();
+      await axiosInstance.post("/branches/", data);
+      toast.success(b.success.add);
       setShowAddModal(false);
-      setTimeout(() => setSuccessMsg(""), 3000);
-    } catch (error) {
-      console.error('Error adding branch:', error);
-      setError("فشل في إضافة الفرع");
+      await fetchBranches();
+    } catch {
+      toast.error(b.errors.add);
     }
   };
 
-  // تعديل فرع
-  const handleEditBranch = async (data: any) => {
+  const handleEditBranch = async (data: Record<string, unknown>) => {
     if (!selectedBranchId) return;
     try {
       await axiosInstance.put(`/branches/${selectedBranchId}`, data);
-      setSuccessMsg("تم تعديل بيانات الفرع بنجاح!");
-      await fetchBranches();
+      toast.success(b.success.update);
       setShowEditModal(false);
-      setTimeout(() => setSuccessMsg(""), 3000);
-    } catch (error) {
-      console.error('Error updating branch:', error);
-      setError("فشل في تحديث بيانات الفرع");
+      await fetchBranches();
+    } catch {
+      toast.error(b.errors.update);
     }
   };
 
-  // حذف فرع
   const handleDeleteBranch = async () => {
     if (!selectedBranchId) return;
     try {
       await axiosInstance.delete(`/branches/${selectedBranchId}/`);
-      setSuccessMsg("تم حذف الفرع بنجاح!");
-      await fetchBranches();
+      toast.success(b.success.delete);
       setShowDeleteModal(false);
       setSelectedBranchId(null);
-      setTimeout(() => setSuccessMsg(""), 3000);
-    } catch (error) {
-      console.error('Error deleting branch:', error);
-      setError("فشل في حذف الفرع");
+      await fetchBranches();
+    } catch {
+      toast.error(b.errors.delete);
     }
   };
 
-
-  // تحديث نسبة الضريبة
   const handleUpdateTaxRate = async (taxRate: number) => {
     if (!selectedBranchId) return;
     try {
-      const response = await axiosInstance.put(`/api/branches/${selectedBranchId}/tax_rate/`, { tax_rate: taxRate });
-      await fetchBranches();
+      await axiosInstance.put(`/api/branches/${selectedBranchId}/tax_rate/`, { tax_rate: taxRate });
+      toast.success(b.tax.updateSuccess);
       setShowTaxModal(false);
-    } catch (error) {
-      console.error('Error updating tax rate:', error);
-      setError("فشل في تحديث نسبة الضريبة");
+      await fetchBranches();
+    } catch {
+      toast.error(b.errors.tax);
     }
   };
 
-  // اختيار فرع من الجدول
-  const handleRowClick = (id: number) => {
-    setSelectedBranchId(id);
-  };
-
-  // تغيير الترتيب
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortOrder(sortOrder === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortOrder("asc");
+  const handleClearTax = async () => {
+    if (!selectedBranchId || !selectedBranch) return;
+    if (selectedBranch.tax_rate === 0) return;
+    const confirmed = window.confirm(b.tax.clearConfirm);
+    if (!confirmed) return;
+    try {
+      await axiosInstance.delete(`/api/branches/${selectedBranchId}/tax_rate/`);
+      toast.success(b.tax.clearSuccess);
+      await fetchBranches();
+    } catch {
+      toast.error(b.errors.clearTax);
     }
   };
 
-  const selectedBranch = Array.isArray(branches) ? branches.find((b) => b.id === selectedBranchId) : undefined;
+  const statusLabel = (status: string) =>
+    status === "active" ? t.dashboard.status.active : t.dashboard.status.inactive;
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      {successMsg && (
-        <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded relative mb-4" role="alert">
-          <span className="block sm:inline">{successMsg}</span>
+    <div className="space-y-6 max-w-7xl mx-auto">
+      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+        <div>
+          <h2 className="text-2xl md:text-3xl font-black text-slate-900 dark:text-white">{b.title}</h2>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">{b.subtitle}</p>
         </div>
-      )}
-      {error && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
-          <span className="block sm:inline">{error}</span>
-        </div>
-      )}
-      <div className="bg-white rounded-lg shadow-lg p-6">
-        <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-bold">إدارة الفروع</h1>
-          <div className="flex gap-4 flex-wrap">
-        <ModernButton color="#2ecc71" onClick={() => setShowAddModal(true)}>
-          إضافة فرع
-        </ModernButton>
-            <ModernButton color="#3498db" onClick={() => setShowEditModal(true)} disabled={!selectedBranchId}>
-              تعديل
-        </ModernButton>
-            <ModernButton color="#e74c3c" onClick={() => setShowDeleteModal(true)} disabled={!selectedBranchId}>
-              حذف
-        </ModernButton>
-            <ModernButton color="#9b59b6" onClick={() => setShowTaxModal(true)} disabled={!selectedBranchId}>
-              تحديث الضريبة
-        </ModernButton>
-          </div>
-        </div>
-
-        {/* أدوات البحث والتصفية */}
-        <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <input
-              type="text"
-              placeholder="بحث..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full rounded-xl border border-primary-200 bg-primary-50 px-4 py-2 text-primary-700 focus:ring-2 focus:ring-primary-300 shadow-sm"
-            />
-          </div>
-          <div>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="w-full rounded-xl border border-primary-200 bg-primary-50 px-4 py-2 text-primary-700 focus:ring-2 focus:ring-primary-300 shadow-sm"
-            >
-              <option value="all">جميع الحالات</option>
-              <option value="active">نشط</option>
-              <option value="inactive">غير نشط</option>
-            </select>
-          </div>
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          {selectedBranch ? `${b.selected}: ${selectedBranch.name}` : b.noSelection}
+        </p>
       </div>
 
-      {/* جدول الفروع */}
-        <div className="overflow-x-auto rounded-2xl shadow-lg border border-primary-100 bg-white">
-          <table className="min-w-full rounded-2xl overflow-hidden">
-            <thead className="bg-primary-50">
-            <tr>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider cursor-pointer" onClick={() => handleSort("name")}>رقم الفرع {sortField === "name" && (sortOrder === "asc" ? "↑" : "↓")}</th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider cursor-pointer" onClick={() => handleSort("name")}>اسم الفرع {sortField === "name" && (sortOrder === "asc" ? "↑" : "↓")}</th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider cursor-pointer" onClick={() => handleSort("location")}>الموقع {sortField === "location" && (sortOrder === "asc" ? "↑" : "↓")}</th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider cursor-pointer" onClick={() => handleSort("governorate")}>المحافظة {sortField === "governorate" && (sortOrder === "asc" ? "↑" : "↓")}</th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider cursor-pointer" onClick={() => handleSort("employee_count")}>عدد الموظفين {sortField === "employee_count" && (sortOrder === "asc" ? "↑" : "↓")}</th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider cursor-pointer" onClick={() => handleSort("allocated_amount_syp")}>الرصيد (ل.س) {sortField === "allocated_amount_syp" && (sortOrder === "asc" ? "↑" : "↓")}</th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider cursor-pointer" onClick={() => handleSort("allocated_amount_usd")}>الرصيد ($) {sortField === "allocated_amount_usd" && (sortOrder === "asc" ? "↑" : "↓")}</th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider cursor-pointer" onClick={() => handleSort("tax_rate")}>نسبة الضريبة {sortField === "tax_rate" && (sortOrder === "asc" ? "↑" : "↓")}</th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider">الحالة</th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-primary-700 uppercase tracking-wider">رقم الهاتف</th>
-            </tr>
-          </thead>
-            <tbody className="bg-white divide-y divide-primary-100">
-              {Array.isArray(filteredBranches) && filteredBranches.map((branch) => (
-              <tr
-                key={branch.id}
-                onClick={() => handleRowClick(branch.id)}
-                  className={`cursor-pointer transition-all duration-200 hover:bg-primary-50/80 ${selectedBranchId === branch.id ? 'bg-primary-100 shadow-md scale-[1.01] border-r-4 border-primary-400' : ''}`}
-              >
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900 font-bold">{branch.branch_id}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900">{branch.name}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900">{branch.location}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900">{branch.governorate}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900">{branch.employee_count}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900">{(branch.allocated_amount_syp ?? 0).toLocaleString()} ل.س</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900">{(branch.allocated_amount_usd ?? 0).toLocaleString()} $</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900">{branch.tax_rate}%</td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-2 py-1 inline-flex items-center gap-1 text-xs leading-5 font-semibold rounded-full shadow-sm
-                      ${branch.status === 'active' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200'}
-                    `}>
-                      {branch.status === 'active' ? <FiCheckCircle className="text-green-400" /> : <FiXCircle className="text-red-400" />}
-                      {branch.status === 'active' ? 'نشط' : 'غير نشط'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-primary-900">{branch.phone_number || "-"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard label={b.stats.total} value={summary.total} icon={Building2} color="blue" />
+        <StatCard label={b.stats.active} value={summary.active} icon={GitBranchPlus} color="emerald" />
+        <StatCard label={b.stats.balanceSyp} value={summary.totalSyp.toLocaleString()} icon={Wallet} color="amber" />
+        <StatCard label={b.stats.balanceUsd} value={`$${summary.totalUsd.toLocaleString()}`} icon={Wallet} color="violet" />
       </div>
 
-        {/* النوافذ المنبثقة */}
-        {showAddModal && (
-      <BranchModal open={showAddModal} onClose={() => setShowAddModal(false)} title="إضافة فرع جديد">
-            <BranchForm 
-              onSubmit={handleAddBranch} 
-              onCancel={() => setShowAddModal(false)}
-            />
-      </BranchModal>
-        )}
+      <div className="flex flex-wrap gap-2">
+        <ActionButton icon={GitBranchPlus} label={b.actions.add} onClick={() => setShowAddModal(true)} color="emerald" />
+        <ActionButton icon={Pencil} label={b.actions.edit} onClick={() => setShowEditModal(true)} disabled={!selectedBranchId} color="blue" />
+        <ActionButton icon={Trash2} label={b.actions.delete} onClick={() => setShowDeleteModal(true)} disabled={!selectedBranchId} color="red" />
+        <ActionButton icon={Wallet} label={b.actions.funds} onClick={() => setShowFundsModal(true)} disabled={!selectedBranchId} color="amber" />
+        <ActionButton icon={Percent} label={b.actions.setTax} onClick={() => setShowTaxModal(true)} disabled={!selectedBranchId} color="violet" />
+        <ActionButton icon={Percent} label={b.actions.clearTax} onClick={handleClearTax} disabled={!selectedBranchId} color="slate" />
+        <ActionButton icon={History} label={b.actions.history} onClick={() => setShowHistoryModal(true)} disabled={!selectedBranchId} color="cyan" />
+      </div>
 
-        {showEditModal && selectedBranch && (
-          <BranchModal open={showEditModal} onClose={() => setShowEditModal(false)} title="تعديل الفرع">
-          <BranchForm
-              onSubmit={handleEditBranch} 
-            initialData={selectedBranch}
-            onCancel={() => setShowEditModal(false)}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="md:col-span-2 relative">
+          <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input
+            type="text"
+            placeholder={b.search}
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full ps-10 pe-4 py-3 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white"
           />
+        </div>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white"
+        >
+          <option value="all">{b.filterAll}</option>
+          <option value="active">{b.filterActive}</option>
+          <option value="inactive">{b.filterInactive}</option>
+        </select>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white dark:bg-slate-900/50 shadow-sm overflow-hidden">
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-3">
+            <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+            <p className="text-slate-500">{b.loading}</p>
+          </div>
+        ) : filteredBranches.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-3 text-center px-6">
+            <Building2 className="w-12 h-12 text-slate-300 dark:text-slate-600" />
+            <p className="text-slate-500 dark:text-slate-400">{b.empty}</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="bg-slate-50 dark:bg-white/5 text-slate-500 dark:text-slate-400">
+                  {[b.columns.branchId, b.columns.name, b.columns.location, b.columns.governorate, b.columns.employees, b.columns.balanceSyp, b.columns.balanceUsd, b.columns.taxRate, b.columns.status, b.columns.phone].map((col) => (
+                    <th key={col} className="py-3 px-4 text-start font-semibold whitespace-nowrap">{col}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-white/5">
+                {filteredBranches.map((branch) => (
+                  <tr
+                    key={branch.id}
+                    onClick={() => setSelectedBranchId(branch.id)}
+                    className={`cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.03]
+                      ${selectedBranchId === branch.id ? "bg-primary-500/10 ring-1 ring-inset ring-primary-500/30" : ""}`}
+                  >
+                    <td className="py-3 px-4 font-mono text-xs text-slate-600 dark:text-slate-300">{branch.branch_id}</td>
+                    <td className="py-3 px-4 font-semibold text-slate-900 dark:text-white">{branch.name}</td>
+                    <td className="py-3 px-4 text-slate-600 dark:text-slate-300">{branch.location}</td>
+                    <td className="py-3 px-4 text-slate-600 dark:text-slate-300">{branch.governorate}</td>
+                    <td className="py-3 px-4 tabular-nums">{branch.employee_count ?? 0}</td>
+                    <td className="py-3 px-4 tabular-nums font-medium">{(branch.allocated_amount_syp ?? 0).toLocaleString()}</td>
+                    <td className="py-3 px-4 tabular-nums font-medium">{(branch.allocated_amount_usd ?? 0).toLocaleString()}</td>
+                    <td className="py-3 px-4 tabular-nums">{branch.tax_rate ?? 0}%</td>
+                    <td className="py-3 px-4">
+                      <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold
+                        ${branch.status === "active"
+                          ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                          : "bg-slate-500/15 text-slate-600 dark:text-slate-400"}`}>
+                        {statusLabel(branch.status)}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-slate-600 dark:text-slate-300">{branch.phone_number || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <BranchModal open={showAddModal} onClose={() => setShowAddModal(false)} title={b.modals.addTitle}>
+        <BranchForm onSubmit={handleAddBranch} onCancel={() => setShowAddModal(false)} />
+      </BranchModal>
+
+      {selectedBranch && (
+        <>
+          <BranchModal open={showEditModal} onClose={() => setShowEditModal(false)} title={b.modals.editTitle}>
+            <BranchForm initialData={selectedBranch} onSubmit={handleEditBranch} onCancel={() => setShowEditModal(false)} />
           </BranchModal>
-        )}
 
-        {showDeleteModal && selectedBranch && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-lg max-w-md w-full">
-              <h3 className="text-lg font-bold mb-4">تأكيد الحذف</h3>
-              <div className="mb-4">
-                <p className="text-gray-600 mb-2">هل أنت متأكد من حذف الفرع التالي؟</p>
-                <div className="bg-gray-50 p-4 rounded">
-                  <p><span className="font-semibold">رقم الفرع:</span> {selectedBranch.branch_id}</p>
-                  <p><span className="font-semibold">اسم الفرع:</span> {selectedBranch.name}</p>
-                  <p><span className="font-semibold">الموقع:</span> {selectedBranch.location}</p>
-                  <p><span className="font-semibold">المحافظة:</span> {selectedBranch.governorate}</p>
-            </div>
-          </div>
-              <div className="flex justify-end gap-4">
-                <ModernButton color="#e74c3c" onClick={() => setShowDeleteModal(false)}>
-                  إلغاء
-                </ModernButton>
-                <ModernButton color="#2ecc71" onClick={handleDeleteBranch}>
-                  حذف
-                </ModernButton>
-              </div>
-            </div>
-          </div>
-        )}
+          <BranchFundsModal
+            open={showFundsModal}
+            onClose={() => setShowFundsModal(false)}
+            branch={selectedBranch}
+            onSuccess={fetchBranches}
+          />
 
-
-        {showTaxModal && selectedBranch && (
           <BranchTaxModal
             open={showTaxModal}
             onClose={() => setShowTaxModal(false)}
             branch={selectedBranch}
             onSubmit={handleUpdateTaxRate}
           />
-        )}
 
-        {showFundHistoryModal && selectedBranch && (
-      <BranchFundHistoryModal
-        open={showFundHistoryModal}
-        onClose={() => setShowFundHistoryModal(false)}
-        branch={{ id: selectedBranch.id.toString(), name: selectedBranch.name }}
-      />
-        )}
-      </div>
+          <BranchFundHistoryModal
+            open={showHistoryModal}
+            onClose={() => setShowHistoryModal(false)}
+            branch={{ id: String(selectedBranch.id), name: selectedBranch.name }}
+          />
+        </>
+      )}
+
+      {showDeleteModal && selectedBranch && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900 p-6 shadow-xl">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">{b.modals.deleteTitle}</h3>
+            <p className="text-slate-500 dark:text-slate-400 mb-4">{b.modals.deleteMessage}</p>
+            <div className="rounded-xl bg-slate-50 dark:bg-white/5 p-4 mb-6 text-sm space-y-1">
+              <p><strong>{b.columns.branchId}:</strong> {selectedBranch.branch_id}</p>
+              <p><strong>{b.columns.name}:</strong> {selectedBranch.name}</p>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => setShowDeleteModal(false)} className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 dark:hover:bg-white/5">
+                {b.modals.cancel}
+              </button>
+              <button type="button" onClick={handleDeleteBranch} className="px-4 py-2 rounded-xl bg-red-600 text-white font-semibold hover:bg-red-500">
+                {b.modals.confirmDelete}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
-} 
+}
+
+function StatCard({
+  label,
+  value,
+  icon: Icon,
+  color,
+}: {
+  label: string;
+  value: string | number;
+  icon: React.ComponentType<{ className?: string }>;
+  color: "blue" | "emerald" | "amber" | "violet";
+}) {
+  const colors = {
+    blue: "from-blue-500/20 to-blue-600/5 border-blue-500/20 text-blue-600 dark:text-blue-400",
+    emerald: "from-emerald-500/20 to-emerald-600/5 border-emerald-500/20 text-emerald-600 dark:text-emerald-400",
+    amber: "from-amber-500/20 to-amber-600/5 border-amber-500/20 text-amber-600 dark:text-amber-400",
+    violet: "from-violet-500/20 to-violet-600/5 border-violet-500/20 text-violet-600 dark:text-violet-400",
+  };
+  return (
+    <div className={`rounded-2xl border bg-gradient-to-br p-4 ${colors[color]}`}>
+      <div className="flex items-center gap-2 mb-2 opacity-80">
+        <Icon className="w-4 h-4" />
+        <span className="text-xs font-semibold uppercase tracking-wide">{label}</span>
+      </div>
+      <p className="text-2xl font-black text-slate-900 dark:text-white tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+function ActionButton({
+  icon: Icon,
+  label,
+  onClick,
+  disabled,
+  color,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  color: "emerald" | "blue" | "red" | "amber" | "violet" | "slate" | "cyan";
+}) {
+  const colors = {
+    emerald: "bg-emerald-600 hover:bg-emerald-500",
+    blue: "bg-blue-600 hover:bg-blue-500",
+    red: "bg-red-600 hover:bg-red-500",
+    amber: "bg-amber-600 hover:bg-amber-500",
+    violet: "bg-violet-600 hover:bg-violet-500",
+    slate: "bg-slate-600 hover:bg-slate-500",
+    cyan: "bg-cyan-600 hover:bg-cyan-500",
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-white text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${colors[color]}`}
+    >
+      <Icon className="w-4 h-4" />
+      {label}
+    </button>
+  );
+}

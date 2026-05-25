@@ -1,59 +1,50 @@
 "use client";
-import React, { useState, useEffect } from "react";
-import NewTransferForm from "../money-transfer/employee-dashboard/NewTransferForm";
-import OutgoingTransfersTable from "../money-transfer/employee-dashboard/OutgoingTransfersTable";
-import IncomingTransfersTable from "../money-transfer/employee-dashboard/IncomingTransfersTable";
+
+import { useCallback, useEffect, useState } from "react";
+import toast from "react-hot-toast";
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  Building2,
+  Loader2,
+  Plus,
+  Search,
+  User,
+} from "lucide-react";
+import NewTransferForm from "./employee-dashboard/NewTransferForm";
+import OutgoingTransfersTable from "./employee-dashboard/OutgoingTransfersTable";
+import IncomingTransfersTable from "./employee-dashboard/IncomingTransfersTable";
+import TransferGuidePanel from "@/components/money-transfer/TransferGuidePanel";
+import TransactionReceiptModal from "@/components/transaction/TransactionReceiptModal";
 import UserSearchModal from "@/components/ui/UserSearchModal";
-import { useTransactions } from '../hooks/useTransactions';
-import { useBranches } from '../hooks/useBranches';
-import { useAuth } from '../hooks/useAuth';
-import axiosInstance from "../api/axios";
-import PrintTransferView from "./employee-dashboard/PrintTransferView";
-import { Transaction } from "../api/transactions";
+import { useTransactions } from "@/app/hooks/useTransactions";
+import { useBranches } from "@/app/hooks/useBranches";
+import { useAuth } from "@/app/hooks/useAuth";
+import axiosInstance from "@/app/api/axios";
+import type { Transaction } from "@/app/api/transactions";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
-const tabs = [
-  { label: "الرئيسية", key: "dashboard" },
-  { label: "تحويل جديد", key: "new" },
-  { label: "التحويلات الصادرة", key: "outgoing" },
-  { label: "التحويلات الواردة", key: "incoming" },
-];
+type TabKey = "dashboard" | "new" | "outgoing" | "incoming";
 
-const TAX_RATE = 0.1;
+interface Summary {
+  outgoing_count: number;
+  incoming_count: number;
+  branch_name: string | null;
+  username: string;
+  role: string;
+}
 
 export default function MoneyTransferPage() {
-  const [activeTab, setActiveTab] = useState("dashboard");
+  const { t } = useLocale();
+  const m = t.dashboard.moneyTransfer;
+
+  const [activeTab, setActiveTab] = useState<TabKey>("dashboard");
   const [showSearchModal, setShowSearchModal] = useState(false);
-  const [successMsg, setSuccessMsg] = useState("");
+  const [summary, setSummary] = useState<Summary | null>(null);
   const [outgoingPage, setOutgoingPage] = useState(1);
   const [incomingPage, setIncomingPage] = useState(1);
-  const [perPage] = useState(10);
-  const [outgoingStats, setOutgoingStats] = useState(0);
-  const [incomingStats, setIncomingStats] = useState(0);
-  
-  const { 
-    loading: transactionsLoading,
-    error: transactionsError,
-    transactions,
-    getTransactions,
-    createTransaction,
-    getTransaction,
-    updateStatus,
-    totalPages,
-    totalItems
-  } = useTransactions();
+  const perPage = 10;
 
-  const {
-    loading: branchesLoading,
-    error: branchesError,
-    branches,
-    getBranches,
-    currentBranch,
-    getBranch
-  } = useBranches();
-
-  const { user } = useAuth();
-
-  // حالات التصفية
   const [searchId, setSearchId] = useState("");
   const [searchSender, setSearchSender] = useState("");
   const [searchReceiver, setSearchReceiver] = useState("");
@@ -62,118 +53,81 @@ export default function MoneyTransferPage() {
   const [searchEndDate, setSearchEndDate] = useState("");
 
   const [printData, setPrintData] = useState<Transaction | null>(null);
-  const [showPrint, setShowPrint] = useState(false);
 
-  // دوال جلب التحويلات مع التصفية
-  const fetchFilteredTransactions = (type: string, page = 1) => {
-    const params: any = {
-      page,
-      per_page: perPage,
-    };
-    if (searchId) params.id = searchId;
-    if (searchSender) params.sender = searchSender;
-    if (searchReceiver) params.receiver = searchReceiver;
-    if (searchStatus && searchStatus !== "all") params.status = searchStatus;
-    if (searchStartDate) params.start_date = searchStartDate;
-    if (searchEndDate) params.end_date = searchEndDate;
-    if (user?.role !== "director" && currentBranch?.id) {
-      if (type === "outgoing") params.branch_id = currentBranch.id;
-      if (type === "incoming") params.destination_branch_id = currentBranch.id;
-    }
-    getTransactions(params);
-  };
+  const { loading: transactionsLoading, error: transactionsError, transactions, getTransactions, createTransaction, getTransaction, updateStatus, totalPages } = useTransactions();
+  const { branches, currentBranch, getBranches, getBranch } = useBranches();
+  const { user } = useAuth();
 
-  // جلب التحويلات الصادرة مع التصفية
-  useEffect(() => {
-    if (activeTab === "outgoing") {
-      fetchFilteredTransactions("outgoing", outgoingPage);
-    }
-    // eslint-disable-next-line
-  }, [outgoingPage, searchId, searchSender, searchReceiver, searchStatus, searchStartDate, searchEndDate, currentBranch?.id, user?.role]);
+  const branchId = user?.branch_id ?? currentBranch?.id;
 
-  // جلب التحويلات الواردة مع التصفية
-  useEffect(() => {
-    if (activeTab === "incoming") {
-      fetchFilteredTransactions("incoming", incomingPage);
-    }
-    // eslint-disable-next-line
-  }, [incomingPage, searchId, searchSender, searchReceiver, searchStatus, searchStartDate, searchEndDate, currentBranch?.id, user?.role]);
-
-  // Fetch initial data
-  useEffect(() => {
-    if (currentBranch?.id) {
-      getTransactions({ 
-        page: 1, 
-        per_page: perPage,
-        branch_id: currentBranch.id,
-        destination_branch_id: currentBranch.id
-      });
-    }
-    getBranches();
-  }, [getTransactions, getBranches, currentBranch?.id, perPage]);
-
-  // جلب بيانات الفرع الحالي تلقائيًا عند توفر user.branch_id
-  useEffect(() => {
-    if (user?.branch_id) {
-      getBranch(user.branch_id);
-    }
-  }, [user?.branch_id, getBranch]);
-
-  // Fetch stats for dashboard
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        if (user?.role === "director") {
-          const outgoingRes = await axiosInstance.get('/transactions/', { params: { page: 1, per_page: 1 } });
-          setOutgoingStats(outgoingRes.data.total || 0);
-          const incomingRes = await axiosInstance.get('/transactions/', { params: { page: 1, per_page: 1 } });
-          setIncomingStats(incomingRes.data.total || 0);
-        } else if (currentBranch?.id) {
-          const outgoingRes = await axiosInstance.get('/transactions/', { params: { branch_id: currentBranch.id, page: 1, per_page: 1 } });
-          setOutgoingStats(outgoingRes.data.total || 0);
-          const incomingRes = await axiosInstance.get('/transactions/', { params: { destination_branch_id: currentBranch.id, page: 1, per_page: 1 } });
-          setIncomingStats(incomingRes.data.total || 0);
-        }
-      } catch (err) {
-        setOutgoingStats(0);
-        setIncomingStats(0);
-      }
-    };
-    fetchStats();
-  }, [currentBranch, user?.role]);
-
-  // Calculate stats from real data
-  const stats = [
-    { 
-      label: "عدد التحويلات الصادرة", 
-      value: outgoingStats, 
-      color: "bg-blue-100", 
-      icon: "🔼" 
-    },
-    { 
-      label: "عدد التحويلات الواردة", 
-      value: incomingStats, 
-      color: "bg-green-100", 
-      icon: "🔽" 
-    },
-    { 
-      label: "اسم الموظف", 
-      value: user?.username || 'غير معروف', 
-      color: "bg-primary-100", 
-      icon: "👤" 
-    },
-    { 
-      label: "الفرع التابع له", 
-      value: currentBranch?.name || 'غير معروف', 
-      color: "bg-primary-100", 
-      icon: "🏢" 
-    },
+  const tabs: { key: TabKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+    { key: "dashboard", label: m.tabs.home, icon: Building2 },
+    { key: "new", label: m.tabs.new, icon: Plus },
+    { key: "outgoing", label: m.tabs.outgoing, icon: ArrowUpRight },
+    { key: "incoming", label: m.tabs.incoming, icon: ArrowDownLeft },
   ];
 
-  // إضافة حوالة جديدة
+  const roleLabel = (role: string) =>
+    t.dashboard.employees.roles[role as keyof typeof t.dashboard.employees.roles] ?? role;
+
+  const branchDisplay = summary?.branch_name
+    ?? (user?.role === "director" ? m.stats.allBranches : m.stats.mainBranch);
+
+  const fetchSummary = useCallback(async () => {
+    try {
+      const res = await axiosInstance.get("/money-transfer/summary/");
+      setSummary(res.data);
+    } catch {
+      setSummary(null);
+    }
+  }, []);
+
+  const buildParams = useCallback(
+    (type: "outgoing" | "incoming", page: number) => {
+      const params: Record<string, string | number | undefined> = { page, per_page: perPage };
+      if (searchId) params.id = searchId;
+      if (searchSender) params.sender = searchSender;
+      if (searchReceiver) params.receiver = searchReceiver;
+      if (searchStatus && searchStatus !== "all") params.status = searchStatus;
+      if (searchStartDate) params.start_date = searchStartDate;
+      if (searchEndDate) params.end_date = searchEndDate;
+      if (user?.role !== "director" && branchId) {
+        if (type === "outgoing") params.branch_id = branchId;
+        if (type === "incoming") params.destination_branch_id = branchId;
+      }
+      return params;
+    },
+    [searchId, searchSender, searchReceiver, searchStatus, searchStartDate, searchEndDate, user?.role, branchId, perPage]
+  );
+
+  useEffect(() => {
+    getBranches();
+    fetchSummary();
+  }, [getBranches, fetchSummary]);
+
+  useEffect(() => {
+    if (user?.branch_id) getBranch(user.branch_id);
+  }, [user?.branch_id, getBranch]);
+
+  useEffect(() => {
+    if (activeTab === "outgoing" && (user?.role === "director" || branchId)) {
+      getTransactions(buildParams("outgoing", outgoingPage));
+    }
+  }, [activeTab, outgoingPage, buildParams, getTransactions, user?.role, branchId]);
+
+  useEffect(() => {
+    if (activeTab === "incoming" && (user?.role === "director" || branchId)) {
+      getTransactions(buildParams("incoming", incomingPage));
+    }
+  }, [activeTab, incomingPage, buildParams, getTransactions, user?.role, branchId]);
+
+  useEffect(() => {
+    if (transactionsError) toast.error(transactionsError);
+  }, [transactionsError]);
+
   const handleAddTransfer = async (transfer: {
-    sender: any;
-    receiver: any;
+    sender: { name: string; mobile?: string; governorate?: string; location?: string; id?: string; address?: string };
+    receiver: { name: string; mobile?: string; governorate?: string };
     amount: number;
     benefitAmount?: number;
     currency: string;
@@ -182,325 +136,280 @@ export default function MoneyTransferPage() {
     resetForm?: () => void;
   }) => {
     try {
-      const newTransaction = await createTransaction({
+      const result = await createTransaction({
         sender: transfer.sender.name,
-        sender_mobile: transfer.sender.mobile || '',
-        sender_governorate: transfer.sender.governorate || '',
-        sender_location: transfer.sender.location || '',
-        sender_id: transfer.sender.id || '',
-        sender_address: transfer.sender.address || '',
+        sender_mobile: transfer.sender.mobile || "",
+        sender_governorate: transfer.sender.governorate || "",
+        sender_location: transfer.sender.location || "",
+        sender_id: transfer.sender.id || "",
+        sender_address: transfer.sender.address || "",
         receiver: transfer.receiver.name,
-        receiver_mobile: transfer.receiver.mobile || '',
-        receiver_governorate: transfer.receiver.governorate || '',
-        receiver_location: transfer.receiver.location || '',
-        receiver_id: transfer.receiver.id || '',
-        receiver_address: transfer.receiver.address || '',
+        receiver_mobile: transfer.receiver.mobile || "",
+        receiver_governorate: transfer.receiver.governorate || "",
         amount: transfer.amount,
         base_amount: transfer.amount,
         benefited_amount: transfer.benefitAmount || transfer.amount,
-        tax_rate: TAX_RATE,
-        tax_amount: transfer.amount * TAX_RATE,
+        tax_rate: 0,
+        tax_amount: 0,
         currency: transfer.currency,
-        message: transfer.message || '',
-        employee_name: user?.username || '',
-        branch_governorate: currentBranch?.governorate || '',
-        destination_branch_id: parseInt(transfer.branch),
+        message: transfer.message || "",
+        employee_name: user?.username || "",
+        branch_governorate: currentBranch?.governorate || "",
+        destination_branch_id: parseInt(transfer.branch, 10),
         branch_id: user?.role === "director" ? 0 : currentBranch?.id,
         date: new Date().toISOString(),
-        status: 'pending',
-        is_received: false
+        status: "processing",
+        is_received: false,
       });
-      setSuccessMsg("تمت إضافة الحوالة بنجاح!");
-      if (transfer.resetForm) transfer.resetForm();
+      toast.success(m.success.created);
+      transfer.resetForm?.();
       setActiveTab("outgoing");
       setOutgoingPage(1);
-      // جلب بيانات التحويل الكاملة للطباعة
-      if (newTransaction?.transaction_id) {
-        const fullTransfer = await getTransaction(newTransaction.transaction_id);
-        // Type guard for possible wrapped response
-        const transactionData = (fullTransfer && typeof fullTransfer === 'object' && 'transaction' in fullTransfer)
-          ? fullTransfer.transaction
-          : fullTransfer;
-        setPrintData(transactionData as Transaction);
-        setShowPrint(true);
+      fetchSummary();
+      if (result?.transaction_id) {
+        const full = await getTransaction(result.transaction_id);
+        setPrintData(full as Transaction);
       }
-      // جلب التحويلات الصادرة مباشرة بعد الإرسال
-      if (user?.role === "director") {
-        getTransactions({ page: 1, per_page: perPage });
-      } else if (currentBranch?.id) {
-        getTransactions({ page: 1, per_page: perPage, branch_id: currentBranch.id });
-      }
-      setTimeout(() => setSuccessMsg(""), 3000);
-    } catch (error) {
-      setSuccessMsg("حدث خطأ أثناء إضافة الحوالة");
-      setTimeout(() => setSuccessMsg(""), 3000);
+    } catch {
+      toast.error(m.errors.create);
     }
   };
 
-  // تغيير حالة حوالة
   const handleStatusChange = async (id: string, status: string) => {
     try {
       await updateStatus({ transaction_id: id, status });
-      // تحديث التحويلات بعد تغيير الحالة
-      if (activeTab === "outgoing") {
-        setOutgoingPage(1);
-        if (user?.role === "director") {
-          getTransactions({ page: 1, per_page: perPage });
-        } else if (currentBranch?.id) {
-          getTransactions({ page: 1, per_page: perPage, branch_id: currentBranch.id });
-        }
-      } else if (activeTab === "incoming") {
-        setIncomingPage(1);
-        if (user?.role === "director") {
-          getTransactions({ page: 1, per_page: perPage });
-        } else if (currentBranch?.id) {
-          getTransactions({ page: 1, per_page: perPage, destination_branch_id: currentBranch.id });
-        }
-      }
-    } catch (error) {
-      setSuccessMsg("حدث خطأ أثناء تحديث حالة الحوالة");
-      setTimeout(() => setSuccessMsg(""), 3000);
+      toast.success(t.dashboard.transactions.success.status);
+      if (activeTab === "outgoing") getTransactions(buildParams("outgoing", outgoingPage));
+      if (activeTab === "incoming") getTransactions(buildParams("incoming", incomingPage));
+      fetchSummary();
+    } catch {
+      toast.error(m.errors.status);
     }
   };
 
-  return (
-    <div className="min-h-screen bg-gradient-to-tr from-primary-50 via-blue-50 to-white">
-      <div className="container mx-auto p-4 md:p-10">
-        <h1 className="text-4xl md:text-5xl font-extrabold mb-10 text-primary-800 text-center drop-shadow-sm tracking-wide">نظام تحويل الأموال</h1>
-        {transactionsError && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-6 py-4 rounded-2xl relative mb-6 text-lg font-bold text-center shadow-sm" role="alert">
-            <strong className="font-extrabold">خطأ!</strong>
-            <span className="block sm:inline"> {transactionsError}</span>
+  const clearFilters = () => {
+    setSearchId("");
+    setSearchSender("");
+    setSearchReceiver("");
+    setSearchStatus("");
+    setSearchStartDate("");
+    setSearchEndDate("");
+  };
+
+  const outgoingList =
+    user?.role === "director" || !branchId
+      ? transactions
+      : transactions.filter((tr) => tr.branch_id === branchId);
+
+  const incomingList =
+    user?.role === "director" || !branchId
+      ? transactions
+      : transactions.filter((tr) => tr.destination_branch_id === branchId);
+
+  const TransferSectionHeader = ({ type }: { type: "outgoing" | "incoming" }) => {
+    const isOut = type === "outgoing";
+    const Icon = isOut ? ArrowUpRight : ArrowDownLeft;
+    const title = isOut ? m.sections.outgoingTitle : m.sections.incomingTitle;
+    const desc = isOut ? m.sections.outgoingDesc : m.sections.incomingDesc;
+    const count = isOut ? summary?.outgoing_count : summary?.incoming_count;
+    const color = isOut ? "text-blue-600 dark:text-blue-400" : "text-emerald-600 dark:text-emerald-400";
+    const bg = isOut ? "bg-blue-500/10 border-blue-500/20" : "bg-emerald-500/10 border-emerald-500/20";
+    return (
+      <div className={`flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 rounded-2xl border ${bg} mb-6`}>
+        <div className="flex gap-3">
+          <div className={`p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/50 ${color}`}>
+            <Icon className="w-5 h-5" />
           </div>
-        )}
-        {successMsg && (
-          <div className="bg-green-100 border border-green-400 text-green-700 px-6 py-4 rounded-2xl relative mb-6 text-lg font-bold text-center shadow-sm" role="alert">
-            <span className="block sm:inline">{successMsg}</span>
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">{title}</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{desc}</p>
           </div>
+        </div>
+        {count !== undefined && (
+          <span className={`inline-flex self-start sm:self-center px-3 py-1 rounded-full text-sm font-bold ${color} bg-white/80 dark:bg-slate-900/50`}>
+            {count.toLocaleString()}
+          </span>
         )}
-        {/* التبويبات */}
-        <div className="flex flex-wrap gap-2 mb-10 justify-center">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              className={`px-7 py-2 md:px-10 md:py-3 rounded-t-2xl font-bold text-lg transition border-b-4 focus:outline-none shadow-sm
-                ${activeTab === tab.key
-                  ? "bg-white border-primary-500 text-primary-800 shadow-lg scale-105 z-10"
-                  : "bg-primary-100 border-transparent text-primary-500 hover:bg-primary-200 hover:scale-105"}
-              `}
-              onClick={() => setActiveTab(tab.key)}
-              style={{ minWidth: 120 }}
-            >
-              {tab.label}
-            </button>
+      </div>
+    );
+  };
+
+  const FilterBar = () => (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 mb-6 p-4 rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/10">
+      <FilterInput label={m.filters.id} value={searchId} onChange={setSearchId} />
+      <FilterInput label={m.filters.sender} value={searchSender} onChange={setSearchSender} />
+      <FilterInput label={m.filters.receiver} value={searchReceiver} onChange={setSearchReceiver} />
+      <div>
+        <label className="block text-xs font-medium text-slate-500 mb-1">{m.filters.status}</label>
+        <select value={searchStatus} onChange={(e) => setSearchStatus(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/50 text-sm">
+          <option value="all">{m.filters.all}</option>
+          {(["pending", "processing", "completed", "cancelled", "rejected"] as const).map((s) => (
+            <option key={s} value={s}>{t.dashboard.status[s]}</option>
           ))}
-        </div>
-        {/* محتوى التبويب */}
-        <div className="bg-white/90 rounded-3xl shadow-2xl p-4 md:p-10 border border-primary-100 backdrop-blur-md min-h-[350px] md:min-h-[420px]" style={{ boxShadow: '0 8px 32px #1976d220' }}>
-        {activeTab === "dashboard" && (
-          <>
-            {/* إحصائيات */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6 mb-10">
-              {stats.map((stat, idx) => (
-                <div key={idx} className={`rounded-2xl shadow-lg p-7 flex flex-col items-center ${stat.color} border border-primary-100 hover:scale-105 transition-all duration-200`}>
-                  <span className="text-4xl mb-2">{stat.icon}</span>
-                  <span className="text-3xl font-extrabold text-primary-900">{stat.value}</span>
-                  <span className="text-gray-600 mt-2 text-lg font-bold">{stat.label}</span>
-                </div>
-              ))}
-            </div>
-            {/* إجراءات */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <button
-                className="bg-primary-500 text-white p-7 rounded-2xl shadow-lg hover:bg-primary-600 transition flex items-center justify-center gap-4 text-xl font-bold"
-                onClick={() => setActiveTab("new")}
-              >
-                <span className="text-3xl">➕</span>
-                <span>إضافة تحويل جديد</span>
-              </button>
-              <button
-                className="bg-blue-500 text-white p-7 rounded-2xl shadow-lg hover:bg-blue-600 transition flex items-center justify-center gap-4 text-xl font-bold"
-                onClick={() => setActiveTab("outgoing")}
-              >
-                <span className="text-3xl">📤</span>
-                <span>عرض التحويلات الصادرة</span>
-              </button>
-              <button
-                className="bg-green-500 text-white p-7 rounded-2xl shadow-lg hover:bg-green-600 transition flex items-center justify-center gap-4 text-xl font-bold"
-                onClick={() => setActiveTab("incoming")}
-              >
-                <span className="text-3xl">📥</span>
-                <span>عرض التحويلات الواردة</span>
-              </button>
-              <button
-                className="bg-purple-500 text-white p-7 rounded-2xl shadow-lg hover:bg-purple-600 transition flex items-center justify-center gap-4 text-xl font-bold"
-                onClick={() => setShowSearchModal(true)}
-              >
-                <span className="text-3xl">🔍</span>
-                <span>بحث عن تحويل</span>
-              </button>
-            </div>
-          </>
-        )}
-        {activeTab === "new" && (
-          <NewTransferForm 
-            onSubmit={handleAddTransfer} 
-            branches={branches.filter(b => b.id !== currentBranch?.id)}
-            currentBranch={currentBranch}
-          />
-        )}
-        {activeTab === "outgoing" && (
-          <>
-            <div className="flex flex-wrap gap-4 mb-6 items-end bg-primary-50/60 p-4 rounded-2xl border border-primary-100 shadow-sm">
-              <div>
-                <label className="block text-sm mb-1 font-bold text-primary-700">رقم الحوالة</label>
-                <input type="text" className="input-modern" value={searchId} onChange={e => setSearchId(e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-sm mb-1 font-bold text-primary-700">اسم المرسل</label>
-                <input type="text" className="input-modern" value={searchSender} onChange={e => setSearchSender(e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-sm mb-1 font-bold text-primary-700">اسم المستلم</label>
-                <input type="text" className="input-modern" value={searchReceiver} onChange={e => setSearchReceiver(e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-sm mb-1 font-bold text-primary-700">الحالة</label>
-                <select className="input-modern" value={searchStatus} onChange={e => setSearchStatus(e.target.value)}>
-                  <option value="all">الكل</option>
-                  <option value="pending">قيد الانتظار</option>
-                  <option value="processing">قيد المعالجة</option>
-                  <option value="completed">مكتمل</option>
-                  <option value="cancelled">ملغي</option>
-                  <option value="rejected">مرفوض</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm mb-1 font-bold text-primary-700">من تاريخ</label>
-                <input type="date" className="input-modern" value={searchStartDate} onChange={e => setSearchStartDate(e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-sm mb-1 font-bold text-primary-700">إلى تاريخ</label>
-                <input type="date" className="input-modern" value={searchEndDate} onChange={e => setSearchEndDate(e.target.value)} />
-              </div>
-              <button className="bg-gray-200 px-6 py-2 rounded-xl font-bold text-primary-700 hover:bg-gray-300 transition shadow" onClick={() => {
-                setSearchId(""); setSearchSender(""); setSearchReceiver(""); setSearchStatus(""); setSearchStartDate(""); setSearchEndDate("");
-              }}>مسح التصفية</button>
-            </div>
-            <div className="flex justify-end mb-4">
-              <button
-                className="bg-blue-500 text-white px-8 py-2 rounded-xl shadow-md hover:bg-blue-600 transition font-bold text-lg"
-                onClick={() => fetchFilteredTransactions("outgoing", outgoingPage)}
-                disabled={transactionsLoading}
-              >
-                {transactionsLoading ? "جاري التحديث..." : "تحديث"}
-              </button>
-            </div>
-            <OutgoingTransfersTable 
-              transfers={user?.role === "director" ? transactions : transactions.filter(t => t.branch_id === currentBranch?.id)} 
-              onStatusChange={handleStatusChange}
-              currentPage={outgoingPage}
-              totalPages={totalPages}
-              onPageChange={setOutgoingPage}
-              loading={transactionsLoading}
-            />
-          </>
-        )}
-        {activeTab === "incoming" && (
-          <>
-            <div className="flex flex-wrap gap-4 mb-6 items-end bg-primary-50/60 p-4 rounded-2xl border border-primary-100 shadow-sm">
-              <div>
-                <label className="block text-sm mb-1 font-bold text-primary-700">رقم الحوالة</label>
-                <input type="text" className="input-modern" value={searchId} onChange={e => setSearchId(e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-sm mb-1 font-bold text-primary-700">اسم المرسل</label>
-                <input type="text" className="input-modern" value={searchSender} onChange={e => setSearchSender(e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-sm mb-1 font-bold text-primary-700">اسم المستلم</label>
-                <input type="text" className="input-modern" value={searchReceiver} onChange={e => setSearchReceiver(e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-sm mb-1 font-bold text-primary-700">الحالة</label>
-                <select className="input-modern" value={searchStatus} onChange={e => setSearchStatus(e.target.value)}>
-                  <option value="all">الكل</option>
-                  <option value="pending">قيد الانتظار</option>
-                  <option value="processing">قيد المعالجة</option>
-                  <option value="completed">مكتمل</option>
-                  <option value="cancelled">ملغي</option>
-                  <option value="rejected">مرفوض</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm mb-1 font-bold text-primary-700">من تاريخ</label>
-                <input type="date" className="input-modern" value={searchStartDate} onChange={e => setSearchStartDate(e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-sm mb-1 font-bold text-primary-700">إلى تاريخ</label>
-                <input type="date" className="input-modern" value={searchEndDate} onChange={e => setSearchEndDate(e.target.value)} />
-              </div>
-              <button className="bg-gray-200 px-6 py-2 rounded-xl font-bold text-primary-700 hover:bg-gray-300 transition shadow" onClick={() => {
-                setSearchId(""); setSearchSender(""); setSearchReceiver(""); setSearchStatus(""); setSearchStartDate(""); setSearchEndDate("");
-              }}>مسح التصفية</button>
-            </div>
-            <div className="flex justify-end mb-4">
-              <button
-                className="bg-green-500 text-white px-8 py-2 rounded-xl shadow-md hover:bg-green-600 transition font-bold text-lg"
-                onClick={() => fetchFilteredTransactions("incoming", incomingPage)}
-                disabled={transactionsLoading}
-              >
-                {transactionsLoading ? "جاري التحديث..." : "تحديث"}
-              </button>
-            </div>
-            <IncomingTransfersTable 
-              transfers={user?.role === "director" ? transactions : transactions.filter(t => t.destination_branch_id === currentBranch?.id)} 
-              onStatusChange={handleStatusChange}
-              currentPage={incomingPage}
-              totalPages={totalPages}
-              onPageChange={setIncomingPage}
-              loading={transactionsLoading}
-            />
-          </>
-        )}
-        {showSearchModal && (
-          <UserSearchModal
-            open={showSearchModal}
-            onClose={() => setShowSearchModal(false)}
-            onSelect={(user) => {
-              console.log('Selected user:', user);
-              setShowSearchModal(false);
-            }}
-          />
-        )}
-        {showPrint && printData && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
-            <div className="relative w-full max-w-2xl mx-auto">
-              <PrintTransferView transfer={printData} onClose={() => setShowPrint(false)} />
-            </div>
-          </div>
-        )}
-        <style jsx>{`
-          .input-modern {
-            border: 1.5px solid #e3f2fd;
-            border-radius: 1rem;
-            padding: 0.75rem 1.25rem;
-            width: 100%;
-            background: #f8fbff;
-            font-size: 1.1rem;
-            font-weight: 500;
-            color: #222;
-            transition: box-shadow 0.2s, border 0.2s;
-            outline: none;
-          }
-          .input-modern:focus {
-            border-color: #1976d2;
-            box-shadow: 0 0 0 2px #1976d233;
-            background: #fff;
-          }
-        `}</style>
-        </div>
+        </select>
+      </div>
+      <FilterInput label={m.filters.fromDate} value={searchStartDate} onChange={setSearchStartDate} type="date" />
+      <FilterInput label={m.filters.toDate} value={searchEndDate} onChange={setSearchEndDate} type="date" />
+      <div className="flex items-end">
+        <button type="button" onClick={clearFilters} className="px-4 py-2 rounded-xl text-sm font-medium bg-slate-200 dark:bg-white/10 hover:bg-slate-300 dark:hover:bg-white/15">
+          {m.actions.clearFilters}
+        </button>
       </div>
     </div>
   );
-} 
+
+  return (
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 transition-colors">
+      <div className="max-w-7xl mx-auto px-4 py-6 md:py-10 space-y-6">
+        <div className="text-center md:text-start">
+          <h1 className="text-2xl md:text-3xl font-black text-slate-900 dark:text-white">{m.title}</h1>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">{m.subtitle}</p>
+        </div>
+
+        <div className="flex flex-wrap gap-2 justify-center md:justify-start">
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => {
+                  setActiveTab(tab.key);
+                  if (tab.key === "outgoing") setOutgoingPage(1);
+                  if (tab.key === "incoming") setIncomingPage(1);
+                }}
+                className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all
+                  ${activeTab === tab.key
+                    ? "bg-primary-600 text-white shadow-lg shadow-primary-500/25"
+                    : "bg-white dark:bg-slate-900/50 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-white/10 hover:border-primary-500/40"}`}
+              >
+                <Icon className="w-4 h-4" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white dark:bg-slate-900/50 shadow-sm p-4 md:p-8 min-h-[420px]">
+          {activeTab === "dashboard" && (
+            <div className="space-y-8">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <StatCard icon={ArrowUpRight} label={m.stats.outgoing} value={summary?.outgoing_count ?? 0} color="blue" />
+                <StatCard icon={ArrowDownLeft} label={m.stats.incoming} value={summary?.incoming_count ?? 0} color="emerald" />
+                <StatCard icon={User} label={m.stats.employee} value={summary?.username || user?.username || "—"} color="violet" />
+                <StatCard icon={Building2} label={m.stats.branch} value={branchDisplay} color="amber" sub={user?.role ? roleLabel(user.role) : undefined} />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <QuickAction icon={Plus} label={m.actions.newTransfer} onClick={() => setActiveTab("new")} color="primary" />
+                <QuickAction icon={ArrowUpRight} label={m.actions.viewOutgoing} onClick={() => setActiveTab("outgoing")} color="blue" />
+                <QuickAction icon={ArrowDownLeft} label={m.actions.viewIncoming} onClick={() => setActiveTab("incoming")} color="emerald" />
+                <QuickAction icon={Search} label={m.actions.search} onClick={() => setShowSearchModal(true)} color="violet" />
+              </div>
+            </div>
+          )}
+
+          {activeTab === "new" && (
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+              <div className="xl:col-span-2">
+                <NewTransferForm
+                  onSubmit={handleAddTransfer}
+                  branches={branches.filter((b) => b.id !== currentBranch?.id)}
+                  currentBranch={currentBranch}
+                />
+              </div>
+              <TransferGuidePanel />
+            </div>
+          )}
+
+          {activeTab === "outgoing" && (
+            <>
+              <TransferSectionHeader type="outgoing" />
+              <FilterBar />
+              <div className="flex justify-end mb-4">
+                <button type="button" onClick={() => getTransactions(buildParams("outgoing", outgoingPage))} disabled={transactionsLoading} className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-semibold disabled:opacity-50">
+                  {transactionsLoading ? "..." : m.actions.refresh}
+                </button>
+              </div>
+              {transactionsLoading ? (
+                <LoadingState label={t.dashboard.transactions.loading} />
+              ) : (
+                <OutgoingTransfersTable transfers={outgoingList} onStatusChange={handleStatusChange} currentPage={outgoingPage} totalPages={totalPages} onPageChange={setOutgoingPage} loading={false} emptyHint={m.sections.outgoingDesc} />
+              )}
+            </>
+          )}
+
+          {activeTab === "incoming" && (
+            <>
+              <TransferSectionHeader type="incoming" />
+              <FilterBar />
+              <div className="flex justify-end mb-4">
+                <button type="button" onClick={() => getTransactions(buildParams("incoming", incomingPage))} disabled={transactionsLoading} className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold disabled:opacity-50">
+                  {transactionsLoading ? "..." : m.actions.refresh}
+                </button>
+              </div>
+              {transactionsLoading ? (
+                <LoadingState label={t.dashboard.transactions.loading} />
+              ) : (
+                <IncomingTransfersTable transfers={incomingList} onStatusChange={handleStatusChange} currentPage={incomingPage} totalPages={totalPages} onPageChange={setIncomingPage} loading={false} emptyHint={m.sections.incomingDesc} />
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {showSearchModal && (
+        <UserSearchModal open={showSearchModal} onClose={() => setShowSearchModal(false)} onSelect={() => setShowSearchModal(false)} />
+      )}
+      {printData && (
+        <TransactionReceiptModal transfer={printData} onClose={() => setPrintData(null)} />
+      )}
+    </div>
+  );
+}
+
+function StatCard({ icon: Icon, label, value, color, sub }: { icon: React.ComponentType<{ className?: string }>; label: string; value: string | number; color: "blue" | "emerald" | "violet" | "amber"; sub?: string }) {
+  const colors = {
+    blue: "from-blue-500/20 to-blue-600/5 border-blue-500/20 text-blue-600 dark:text-blue-400",
+    emerald: "from-emerald-500/20 to-emerald-600/5 border-emerald-500/20 text-emerald-600 dark:text-emerald-400",
+    violet: "from-violet-500/20 to-violet-600/5 border-violet-500/20 text-violet-600 dark:text-violet-400",
+    amber: "from-amber-500/20 to-amber-600/5 border-amber-500/20 text-amber-600 dark:text-amber-400",
+  };
+  return (
+    <div className={`rounded-2xl border bg-gradient-to-br p-5 ${colors[color]}`}>
+      <div className="flex items-center gap-2 mb-2 opacity-80">
+        <Icon className="w-4 h-4" />
+        <span className="text-xs font-semibold uppercase tracking-wide">{label}</span>
+      </div>
+      <p className="text-2xl font-black text-slate-900 dark:text-white truncate">{value}</p>
+      {sub && <p className="text-xs text-slate-500 mt-1">{sub}</p>}
+    </div>
+  );
+}
+
+function QuickAction({ icon: Icon, label, onClick, color }: { icon: React.ComponentType<{ className?: string }>; label: string; onClick: () => void; color: "primary" | "blue" | "emerald" | "violet" }) {
+  const colors = { primary: "bg-primary-600 hover:bg-primary-500", blue: "bg-blue-600 hover:bg-blue-500", emerald: "bg-emerald-600 hover:bg-emerald-500", violet: "bg-violet-600 hover:bg-violet-500" };
+  return (
+    <button type="button" onClick={onClick} className={`flex items-center gap-3 p-5 rounded-2xl text-white font-semibold transition-colors ${colors[color]}`}>
+      <Icon className="w-5 h-5" />
+      {label}
+    </button>
+  );
+}
+
+function FilterInput({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (v: string) => void; type?: string }) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
+      <input type={type} value={value} onChange={(e) => onChange(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/50 text-sm" />
+    </div>
+  );
+}
+
+function LoadingState({ label }: { label: string }) {
+  return (
+    <div className="flex flex-col items-center py-16 gap-3">
+      <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+      <p className="text-slate-500">{label}</p>
+    </div>
+  );
+}
