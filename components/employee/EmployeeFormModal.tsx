@@ -12,7 +12,7 @@ interface Branch {
   governorate: string;
 }
 
-interface EmployeeFormData {
+export interface EmployeeFormData {
   id?: number;
   username: string;
   password?: string;
@@ -23,7 +23,7 @@ interface EmployeeFormData {
 interface EmployeeFormModalProps {
   open: boolean;
   onClose: () => void;
-  onSubmit: (data: EmployeeFormData) => void;
+  onSubmit: (data: EmployeeFormData) => void | Promise<void>;
   initialData?: {
     id?: number;
     username?: string;

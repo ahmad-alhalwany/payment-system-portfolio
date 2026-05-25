@@ -13,7 +13,7 @@ import {
   Search,
   UserCheck,
 } from "lucide-react";
-import EmployeeFormModal from "@/components/employee/EmployeeFormModal";
+import EmployeeFormModal, { type EmployeeFormData } from "@/components/employee/EmployeeFormModal";
 import ResetPasswordModal from "@/components/shared/ResetPasswordModal";
 import axiosInstance from "@/app/api/axios";
 import { useLocale } from "@/components/providers/LocaleProvider";
@@ -122,7 +122,7 @@ export default function EmployeesPage() {
     setShowDeleteModal(true);
   };
 
-  const handleSubmit = async (data: Record<string, unknown>) => {
+  const handleSubmit = async (data: EmployeeFormData) => {
     try {
       if (editEmployee) {
         await axiosInstance.put(`/users/${editEmployee.id}`, data);

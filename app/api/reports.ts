@@ -2,6 +2,7 @@ import axiosInstance from "./axios";
 
 export interface ReportStats {
   total_count?: number;
+  transaction_count?: number;
   total_amount?: number;
   total_tax?: number;
   completed_count?: number;

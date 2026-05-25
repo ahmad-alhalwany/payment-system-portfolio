@@ -15,7 +15,7 @@ import {
   UserX,
   Building2,
 } from "lucide-react";
-import EmployeeFormModal from "@/components/employee/EmployeeFormModal";
+import EmployeeFormModal, { type EmployeeFormData } from "@/components/employee/EmployeeFormModal";
 import ResetPasswordModal from "@/components/shared/ResetPasswordModal";
 import EmployeesGuidePanel from "@/components/branch-manager/EmployeesGuidePanel";
 import axiosInstance from "@/app/api/axios";
@@ -109,9 +109,9 @@ export default function BranchEmployeesPage() {
     setShowDeleteModal(true);
   };
 
-  const handleSubmit = async (data: Record<string, unknown>) => {
+  const handleSubmit = async (data: EmployeeFormData) => {
     try {
-      const payload = {
+      const payload: EmployeeFormData = {
         ...data,
         role: "employee",
         branch_id: user?.branch_id ?? data.branch_id,

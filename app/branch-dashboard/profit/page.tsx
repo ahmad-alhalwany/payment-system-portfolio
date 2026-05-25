@@ -39,7 +39,7 @@ function exportToCSV(items: BranchProfitItem[], columns: { key: keyof BranchProf
       return typeof val === "string" && val.includes(",") ? `"${val}"` : String(val ?? "");
     }).join(",")
   );
-  const blob = new Blob([header, ...rows].join("\n"), { type: "text/csv;charset=utf-8;" });
+  const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv;charset=utf-8;" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
   link.setAttribute("download", filename);

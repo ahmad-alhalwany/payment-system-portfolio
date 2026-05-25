@@ -356,7 +356,7 @@ function DataTable({
           {rows.map((row, i) => (
             <tr key={i} className="border-b border-slate-100 dark:border-white/5 hover:bg-slate-50/80 dark:hover:bg-white/[0.02]">
               {columns.map((col) => {
-                const raw = (row as Record<string, unknown>)[col.key];
+                const raw = (row as unknown as Record<string, unknown>)[col.key];
                 if (col.status && t && typeof raw === "string") {
                   return (
                     <td key={col.key} className="px-3 py-2.5 whitespace-nowrap">

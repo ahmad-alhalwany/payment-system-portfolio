@@ -249,7 +249,6 @@ export default function DirectorDashboard() {
         onClose={() => setShowEmployeeModal(false)}
         onSubmit={handleEmployeeSubmit}
         initialData={undefined}
-        branches={Array.from(branches, (b) => b.name)}
       />
 
       <BranchModal open={showAddBranchModal} onClose={() => setShowAddBranchModal(false)} title={d.addBranchModal}>
